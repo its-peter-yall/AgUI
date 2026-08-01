@@ -292,6 +292,9 @@ class ResearchBudgetLedger:
             results_examined=self._results_examined,
             provider_bytes=self._provider_bytes,
             excerpt_chars=self._excerpt_chars,
+            sources=self._sources,
+            context_chars=self._context_chars,
+            elapsed_seconds=self._elapsed(),
         )
 
     @classmethod
@@ -301,27 +304,36 @@ class ResearchBudgetLedger:
         cursor: "ResearchCursor",
         *,
         clock: Optional[Clock] = None,
-        sources: int = 0,
-        context_chars: int = 0,
+        sources: Optional[int] = None,
+        context_chars: Optional[int] = None,
         started_at: Optional[float] = None,
     ) -> "ResearchBudgetLedger":
         """Restore ledger counters from a persisted ResearchCursor.
 
-        sources/context_chars are not on ResearchCursor; pass explicitly
-        when resuming so consumed limits cannot reset.
+        Restores sources, context_chars, and elapsed wall time so resume
+        cannot reset hard limits.
         """
         active_clock = clock or time.monotonic
+        restored_sources = (
+            sources if sources is not None else int(cursor.sources)
+        )
+        restored_context = (
+            context_chars
+            if context_chars is not None
+            else int(cursor.context_chars)
+        )
+        elapsed = float(getattr(cursor, "elapsed_seconds", 0.0) or 0.0)
+        if started_at is None:
+            started_at = active_clock() - max(0.0, elapsed)
         usage = ResearchBudgetUsage(
             search_calls=cursor.search_calls,
             llm_turns=cursor.llm_turns,
             results_examined=cursor.results_examined,
-            sources=sources,
+            sources=restored_sources,
             provider_bytes=cursor.provider_bytes,
             excerpt_chars=cursor.excerpt_chars,
-            context_chars=context_chars,
-            started_at=(
-                started_at if started_at is not None else active_clock()
-            ),
+            context_chars=restored_context,
+            started_at=started_at,
         )
         return cls(budget, clock=active_clock, usage=usage)
 

@@ -24,6 +24,7 @@ USAGE:
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -71,6 +72,14 @@ from server.search.types import (
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RECENCY_DAYS = 365
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\)]+)\)")
+_RAW_URL_RE = re.compile(r"https?://\S+")
+_FAKE_SOURCE_ID_RE = re.compile(
+    r"\[(?:src|source)[:\s]+([^\]]+)\]",
+    re.IGNORECASE,
+)
+
 
 class ResearchCancelled(RuntimeError):
     """Raised when a job cancel flag is observed mid-research."""
@@ -86,6 +95,49 @@ class ResearchOutcome:
     warnings: list[GenerationWarning] = field(default_factory=list)
 
 
+def registrable_domain(url: str) -> str:
+    """Return eTLD+1-style registrable domain (subdomains collapse)."""
+    host = (urlsplit(str(url)).hostname or "").lower().strip(".")
+    if not host:
+        return ""
+    parts = [p for p in host.split(".") if p]
+    if len(parts) <= 2:
+        return host
+    # Collapse multi-label public suffixes used in tests and common hosts.
+    multipart_suffixes = {
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "com.au",
+        "net.au",
+        "co.jp",
+        "com.br",
+    }
+    last_two = ".".join(parts[-2:])
+    if last_two in multipart_suffixes and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return last_two
+
+
+def sanitize_section_markdown(
+    markdown: str,
+    *,
+    allowed_ids: set[str],
+) -> str:
+    """Strip raw links and unknown source-id markers from section text."""
+    cleaned = _MARKDOWN_LINK_RE.sub(r"\1", markdown)
+    cleaned = _RAW_URL_RE.sub("", cleaned)
+
+    def _replace_marker(match: Any) -> str:
+        sid = (match.group(1) or "").strip()
+        if sid in allowed_ids:
+            return match.group(0)
+        return ""
+
+    cleaned = _FAKE_SOURCE_ID_RE.sub(_replace_marker, cleaned)
+    return cleaned
+
+
 def coverage_is_complete(
     coverage: Sequence[CoverageItem],
     sources: Sequence[ResearchSource],
@@ -96,20 +148,28 @@ def coverage_is_complete(
     """Deterministic coverage completion rule.
 
     Requires every required item covered or explicit_unknown, at least three
-    distinct root domains among retained sources, and freshness-sensitive
-    themes backed by an in-window source or explicit_unknown.
+    distinct registrable domains among retained sources, and freshness-
+    sensitive themes backed by an in-window published source or
+    explicit_unknown. Coverage source_ids must exist in retained sources.
     """
     if not coverage:
         return False
+    if not sources:
+        return False
+
+    source_by_id = {source.id: source for source in sources}
 
     for item in coverage:
         if not item.required:
             continue
         if not (item.covered or item.explicit_unknown):
             return False
+        for sid in item.source_ids:
+            if sid not in source_by_id:
+                return False
 
     domains = {
-        (urlsplit(str(source.url)).hostname or "").lower()
+        registrable_domain(str(source.url))
         for source in sources
         if source.url
     }
@@ -117,7 +177,16 @@ def coverage_is_complete(
     if len(domains) < 3:
         return False
 
-    if recency_days is not None and recency_days > 0:
+    active_recency = recency_days
+    if active_recency is None:
+        # Default freshness window for freshness-sensitive themes.
+        has_fresh = any(
+            item.required and item.freshness_sensitive for item in coverage
+        )
+        if has_fresh:
+            active_recency = _DEFAULT_RECENCY_DAYS
+
+    if active_recency is not None and active_recency > 0:
         clock = now or datetime.now(timezone.utc)
         for item in coverage:
             if not item.freshness_sensitive or not item.required:
@@ -127,19 +196,23 @@ def coverage_is_complete(
             if not item.covered:
                 return False
             linked = [
-                source
-                for source in sources
-                if source.id in set(item.source_ids)
+                source_by_id[sid]
+                for sid in item.source_ids
+                if sid in source_by_id
             ]
             if not linked:
                 return False
             fresh_ok = False
             for source in linked:
-                stamp = source.published_at or source.retrieved_at
+                # Prefer publication date; do not treat retrieved_at alone
+                # as proof of freshness.
+                stamp = source.published_at
+                if stamp is None:
+                    continue
                 if stamp.tzinfo is None:
                     stamp = stamp.replace(tzinfo=timezone.utc)
                 age = (clock - stamp).total_seconds() / 86400.0
-                if age <= recency_days:
+                if age <= active_recency:
                     fresh_ok = True
                     break
             if not fresh_ok:
@@ -270,8 +343,16 @@ class ResearchRunner:
                 for search_query_text in batch_queries:
                     self._ensure_not_cancelled(session_id)
                     try:
+                        remaining = (
+                            ledger.remaining_seconds()
+                            if ledger is not None
+                            else 20.0
+                        )
+                        if remaining <= 0:
+                            raise ResearchBudgetExceeded("elapsed_seconds")
                         response = await coordinator.search(
-                            SearchQuery(query=search_query_text)
+                            SearchQuery(query=search_query_text),
+                            timeout_seconds=min(20.0, remaining),
                         )
                     except AllProvidersUnavailable as exc:
                         warning = GenerationWarning(
@@ -440,11 +521,15 @@ class ResearchRunner:
                     warnings=warnings,
                 )
 
+                clean_markdown = sanitize_section_markdown(
+                    draft.section_markdown,
+                    allowed_ids=allowed_ids,
+                )
                 section = self._research_store.upsert_section(
                     report_id=report_id,
                     sequence_index=next_section_index,
                     theme=draft.theme,
-                    markdown=draft.section_markdown,
+                    markdown=clean_markdown,
                     source_ids=list(draft.source_ids),
                 )
                 section_id = (
@@ -467,18 +552,22 @@ class ResearchRunner:
                     ),
                 )
                 section_markdowns.append(
-                    f"## {draft.theme}\n{draft.section_markdown}"
+                    f"## {draft.theme}\n{clean_markdown}"
                 )
                 conflicts.extend(draft.conflicts)
                 completed_themes.append(draft.theme)
                 coverage = self._apply_coverage_updates(
-                    coverage, draft.coverage_updates
+                    coverage,
+                    draft.coverage_updates,
+                    allowed_ids=allowed_ids,
                 )
                 next_section_index += 1
                 iteration += 1
 
                 if coverage_is_complete(
-                    coverage, list(sources_by_id.values())
+                    coverage,
+                    list(sources_by_id.values()),
+                    recency_days=_DEFAULT_RECENCY_DAYS,
                 ):
                     pending_queries = []
                 else:
@@ -498,6 +587,37 @@ class ResearchRunner:
                     ),
                 )
 
+            source_list = list(sources_by_id.values())
+            is_complete = coverage_is_complete(
+                coverage,
+                source_list,
+                recency_days=_DEFAULT_RECENCY_DAYS,
+            )
+            if is_complete and source_list:
+                final_status = ResearchStatus.COMPLETE
+                final_grounding = GroundingStatus.GROUNDED
+            else:
+                final_status = ResearchStatus.DEGRADED
+                final_grounding = GroundingStatus.DEGRADED
+                warning = GenerationWarning(
+                    code="research_incomplete",
+                    message=(
+                        "Research ended without sufficient grounded coverage."
+                    ),
+                )
+                if not any(w.code == warning.code for w in warnings):
+                    warnings.append(warning)
+                    try:
+                        self._research_store.mark_degraded(
+                            session_id=session_id,
+                            warning=warning,
+                        )
+                    except Exception:
+                        pass
+                    self._emit_degraded(session_id, warning)
+                if "Insufficient grounded evidence." not in limitations:
+                    limitations.append("Insufficient grounded evidence.")
+
             return await self._finalize(
                 session_id=session_id,
                 report_id=report_id,
@@ -508,12 +628,8 @@ class ResearchRunner:
                 limitations=limitations,
                 warnings=warnings,
                 llm_context=llm_context,
-                status=ResearchStatus.COMPLETE,
-                grounding=(
-                    GroundingStatus.GROUNDED
-                    if sources_by_id
-                    else GroundingStatus.DEGRADED
-                ),
+                status=final_status,
+                grounding=final_grounding,
                 ledger=ledger,
                 lock=lock,
                 iteration=iteration,
@@ -522,16 +638,25 @@ class ResearchRunner:
                 completed_themes=completed_themes,
             )
         except ResearchCancelled:
-            self._persist_research_cursor(
-                session_id=session_id,
-                lock=lock,
-                coordinator=coordinator,
-                research_cursor=ResearchCursor(
+            if ledger is not None:
+                cancel_cursor = ledger.to_cursor(
                     iteration=iteration,
                     next_section_index=next_section_index,
                     pending_queries=pending_queries,
                     completed_themes=completed_themes,
-                ),
+                )
+            else:
+                cancel_cursor = ResearchCursor(
+                    iteration=iteration,
+                    next_section_index=next_section_index,
+                    pending_queries=pending_queries,
+                    completed_themes=completed_themes,
+                )
+            self._persist_research_cursor(
+                session_id=session_id,
+                lock=lock,
+                coordinator=coordinator,
+                research_cursor=cancel_cursor,
             )
             raise
         except ResearchBudgetExceeded as exc:
@@ -855,11 +980,28 @@ class ResearchRunner:
     def _apply_coverage_updates(
         coverage: list[CoverageItem],
         updates: Sequence[CoverageItem],
+        *,
+        allowed_ids: Optional[set[str]] = None,
     ) -> list[CoverageItem]:
         if not updates:
             return coverage
+        allowed = allowed_ids or set()
         by_theme = {item.theme: item for item in coverage}
         for update in updates:
+            cleaned_ids = [
+                sid for sid in update.source_ids if sid in allowed
+            ]
+            if cleaned_ids != list(update.source_ids):
+                # Fabricated IDs cannot mark coverage complete.
+                update = update.model_copy(
+                    update={
+                        "source_ids": cleaned_ids,
+                        "covered": (
+                            update.covered and bool(cleaned_ids)
+                        )
+                        or update.explicit_unknown,
+                    }
+                )
             by_theme[update.theme] = update
         # Preserve original order then append new themes
         ordered: list[CoverageItem] = []
@@ -868,9 +1010,10 @@ class ResearchRunner:
             ordered.append(by_theme[item.theme])
             seen.add(item.theme)
         for item in updates:
-            if item.theme not in seen:
-                ordered.append(item)
-                seen.add(item.theme)
+            theme = item.theme
+            if theme not in seen and theme in by_theme:
+                ordered.append(by_theme[theme])
+                seen.add(theme)
         return ordered
 
 

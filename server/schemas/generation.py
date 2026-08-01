@@ -88,6 +88,9 @@ class ResearchCursor(BaseModel):
     results_examined: int = Field(default=0, ge=0, le=120)
     provider_bytes: int = Field(default=0, ge=0, le=5_000_000)
     excerpt_chars: int = Field(default=0, ge=0, le=100_000)
+    sources: int = Field(default=0, ge=0, le=40)
+    context_chars: int = Field(default=0, ge=0, le=100_000)
+    elapsed_seconds: float = Field(default=0.0, ge=0.0, le=180.0)
 
 
 class GenerationCursor(BaseModel):

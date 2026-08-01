@@ -95,7 +95,8 @@ class ResearchRunnerTests(unittest.IsolatedAsyncioTestCase):
             coordinator=coordinator,
             llm_context=MagicMock(),
         )
-        self.assertEqual(outcome.status, ResearchStatus.COMPLETE)
+        # Empty evidence cannot claim GROUNDED COMPLETE (M2).
+        self.assertEqual(outcome.status, ResearchStatus.DEGRADED)
         stores.jobs.update_cursor.assert_called()
         stores.research.upsert_section.assert_called_once()
         stores.research.finalize_report.assert_called_once()

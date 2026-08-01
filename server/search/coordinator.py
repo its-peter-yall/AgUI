@@ -185,13 +185,21 @@ class ProviderCoordinator:
             adapter = self._adapters[provider_id]
             api_key = self._credentials[provider_id]
 
+            remaining_fn = getattr(self._ledger, "remaining_seconds", None)
+            effective_timeout = timeout_seconds
+            if callable(remaining_fn):
+                try:
+                    remaining = float(remaining_fn())
+                    effective_timeout = min(timeout_seconds, max(remaining, 0.01))
+                except Exception:
+                    effective_timeout = timeout_seconds
             try:
                 return await self._attempt_provider(
                     adapter=adapter,
                     provider_id=provider_id,
                     api_key=api_key,
                     query=query,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=effective_timeout,
                 )
             except SearchError as exc:
                 if exc.error_class not in ROTATABLE_SEARCH_ERRORS:
