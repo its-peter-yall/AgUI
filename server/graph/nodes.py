@@ -4,25 +4,30 @@ FILE: nodes.py
 LOCATION: server/graph/nodes.py
 ============================================================================
 PURPOSE:
-    Provides LangGraph node functions for adaptive course generation.
+    Provides LangGraph node functions for durable staged course generation.
 ROLE IN PROJECT:
-    Wraps the existing Planner, Generator, and Quizzer agents for graph use.
-    - Two-stage fan-out: generators parallel, then quizzer parallel
-    - Error handlers for graceful degradation on failures
+    Implements graph steps for research, TOC outline, exact brief batching,
+    fan-out Generator/Quizzer execution, advance barrier, and finalization.
 KEY COMPONENTS:
-    - planner_node: Creates course outline and learning session
-    - fan_out_generators: Sends each topic to a parallel generator
-    - generator_node: Generates content for one topic (pure, no DB)
-    - fan_out_quizzers: Sends each generator result to a parallel quizzer
-    - quizzer_node: Generates quiz and persists concept node
-    - generator_error_handler: Catches generator failures after retries
-    - quizzer_error_handler: Catches quizzer failures, persists ERROR node
-    - build_response_node: Builds final response and metrics
+    - initialize_generation_node
+    - route_optional_research
+    - researcher_node
+    - outline_planner_node
+    - select_topic_batch
+    - plan_brief_batch_node
+    - fan_out_generators
+    - generator_node
+    - prepare_quiz_batch_node
+    - fan_out_quizzers
+    - quizzer_node
+    - advance_batch_node
+    - route_next_batch
+    - finalize_generation_node
 DEPENDENCIES:
-    - External: asyncio, logging, time, langgraph
-    - Internal: server.agents, server.database, server.schemas
+    - External: asyncio, logging, collections, langgraph
+    - Internal: server.agents, server.database, server.schemas, server.graph.runner
 USAGE:
-    from server.graph.nodes import planner_node, generator_node, quizzer_node
+    from server.graph.nodes import initialize_generation_node, plan_brief_batch_node
 ============================================================================
 """
 
@@ -30,57 +35,94 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
+from collections import namedtuple
 from typing import Any, Optional
 
-from langgraph.errors import NodeError
 from langgraph.runtime import Runtime
 from langgraph.types import Send
 
 from server.agents.generator import GeneratedContent, generator_agent
-from server.agents.planner import planner_agent, validate_complexity_distribution
-from server.agents.quizzer import quizzer_agent
+from server.agents.planner import PlannerAgent, ResumablePlannerError, planner_agent
+from server.agents.quizzer import QuizzerAgent, quizzer_agent
+from server.database.generation_artifacts import (
+    GenerationArtifactConflict,
+    generation_artifact_store,
+)
+from server.database.generation_jobs import generation_job_store
 from server.database.learning_persistence import learning_manager
+from server.database.progress_events import progress_event_store
+from server.database.research_store import research_store
+from server.graph.runner import GenerationCancelled, ResumableGenerationError
 from server.graph.state import (
     CourseGraphContext,
     CourseState,
     GeneratorResult,
+    GeneratorWorkerState,
+    QuizzerWorkerState,
     TopicResult,
 )
-from server.schemas.learning import CourseOutline, FailedStep, NodeStatus, QuizSet, TopicNode
+from server.schemas.generation import (
+    PREVIEW_BATCH_SIZE,
+    STANDARD_BATCH_SIZE,
+    FailedStep,
+    GenerationBrief,
+    GenerationStage,
+    GroundingStatus,
+    ProgressEventType,
+)
+from server.schemas.learning import CourseOutline, NodeStatus, QuizSet, TopicNode
 from server.schemas.llm import LLMContext
+from server.schemas.search import SearchContext
+from server.services.research_runner import run_research
 
 logger = logging.getLogger(__name__)
 
+BatchSpec = namedtuple("BatchSpec", ["start", "size"])
+
+
+def select_topic_batch(cursor: int, total_topics: int) -> BatchSpec:
+    """Select the next batch range starting at cursor."""
+    if cursor == 0:
+        size = min(PREVIEW_BATCH_SIZE, total_topics)
+    else:
+        size = min(STANDARD_BATCH_SIZE, total_topics - cursor)
+    return BatchSpec(start=cursor, size=size)
+
+
+def raise_if_cancel_requested(session_id: str) -> None:
+    """Check database for cooperative cancel flag and raise GenerationCancelled if set."""
+    if session_id and generation_job_store.is_cancel_requested(session_id):
+        raise GenerationCancelled(session_id)
+
 
 def _context_payload(runtime: Any) -> dict[str, Any]:
-    """Return runtime context payload."""
+    """Extract runtime context payload dictionary."""
     if runtime is None:
         return {}
     if isinstance(runtime, dict):
-        if "llm_context" in runtime or "session_ref" in runtime:
+        if "llm_context" in runtime or "search_context" in runtime:
             return runtime
         context = runtime.get("context", {})
         if isinstance(context, dict):
             return context
     if hasattr(runtime, "context"):
-        value = getattr(runtime, "context")
-        if isinstance(value, dict):
-            return value
-        if hasattr(value, "model_dump"):
-            dumped = value.model_dump()
+        val = getattr(runtime, "context")
+        if isinstance(val, dict):
+            return val
+        if hasattr(val, "model_dump"):
+            dumped = val.model_dump()
             if isinstance(dumped, dict):
                 return dumped
     if hasattr(runtime, "get"):
-        value = runtime.get("context", {})
-        if isinstance(value, dict):
-            return value
-        value = runtime.get("configurable", {})
-        if isinstance(value, dict):
-            return value
-    value = getattr(runtime, "configurable", {})
-    if isinstance(value, dict):
-        return value
+        val = runtime.get("context", {})
+        if isinstance(val, dict):
+            return val
+        val = runtime.get("configurable", {})
+        if isinstance(val, dict):
+            return val
+    val = getattr(runtime, "configurable", {})
+    if isinstance(val, dict):
+        return val
     return {}
 
 
@@ -96,483 +138,479 @@ def _get_llm_context(runtime: Any) -> LLMContext:
     raise ValueError("llm_context is required in graph config.")
 
 
-def _record_session_id(
-    runtime: Any,
-    session_id: str,
-) -> None:
-    """Record session id in runtime-only config for cancellation cleanup."""
-    session_ref = _context_payload(runtime).get("session_ref")
-    if isinstance(session_ref, dict):
-        session_ref["session_id"] = session_id
+def _get_search_context(runtime: Any) -> SearchContext:
+    """Extract request-scoped Search context from runtime context."""
+    context = _context_payload(runtime).get("search_context")
+    if isinstance(context, SearchContext):
+        return context
+    if isinstance(context, dict):
+        return SearchContext.model_validate(context)
+    return SearchContext(enabled=False)
 
 
-async def planner_node(
+async def initialize_generation_node(
     state: CourseState,
-    runtime: Runtime[CourseGraphContext] | dict[str, Any],
+    runtime: Any = None,
 ) -> dict[str, Any]:
-    """Generate course outline and create the learning session."""
-    llm_context = _get_llm_context(runtime)
-    total_start = state.get("total_start_time", time.perf_counter())
+    """Initialize job execution, resolve depth mode, and determine web search status."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
 
-    resolved_mode = state.get("resolved_mode") or "lite"
-    if resolved_mode not in ("lite", "full"):
-        resolved_mode = "lite"
     user_mode = state.get("mode") or "auto"
+    resolved_mode = state.get("resolved_mode") or "lite"
+    if user_mode != "auto" and user_mode in ("lite", "full"):
+        resolved_mode = user_mode
+    elif resolved_mode not in ("lite", "full"):
+        resolved_mode = "lite"
 
-    planner_start = time.perf_counter()
-    outline: CourseOutline = await planner_agent.plan(
-        state["query"],
-        llm_context=llm_context,
-        mode=resolved_mode,
-    )
-    planner_ms = (time.perf_counter() - planner_start) * 1000
+    search_ctx = _get_search_context(runtime)
+    web_enabled = state.get("web_search_enabled")
+    if web_enabled is None:
+        web_enabled = search_ctx.enabled
 
-    distribution = validate_complexity_distribution(outline)
-    if not distribution["valid"]:
-        logger.warning(
-            "Planner complexity distribution issues detected",
-            extra={
-                "errors": distribution["errors"],
-                "distribution": distribution["distribution"],
-            },
-        )
-    elif distribution["warnings"]:
-        logger.info(
-            "Planner complexity distribution warnings",
-            extra={
-                "warnings": distribution["warnings"],
-                "distribution": distribution["distribution"],
-            },
-        )
-
-    session = learning_manager.create_learning_session(
-        query=state["query"],
-        course_title=outline.course_title,
-        user_id=state.get("user_id"),
-        mode=user_mode,
-        resolved_mode=resolved_mode,
-    )
-    _record_session_id(runtime, session["id"])
-
-    for index, topic in enumerate(outline.topics):
-        initial_status = (
-            NodeStatus.VIEWING_EXPLANATION
-            if index == 0
-            else NodeStatus.LOCKED
-        )
-        learning_manager.create_concept_node(
-            session_id=session["id"],
-            sequence_index=index,
-            title=topic.title,
-            content_markdown="",
-            status=initial_status,
-            complexity=topic.complexity,
-            summary_for_context=topic.summary_for_context,
-            key_terms=topic.key_terms,
-        )
-
-    logger.info(
-        "Planner completed: '%s' with %s topics in %.2fms",
-        outline.course_title,
-        len(outline.topics),
-        planner_ms,
+    next_stage = GenerationStage.RESEARCHING if web_enabled else GenerationStage.OUTLINING
+    generation_job_store.update_stage(session_id, next_stage)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=next_stage,
+        message=f"Initialized course generation (mode={resolved_mode}, web={web_enabled})",
     )
 
     return {
-        "outline": outline.model_dump(),
-        "session": session,
-        "planner_ms": planner_ms,
-        "topic_results": [],
-        "total_start_time": total_start,
-        "parallel_start_time": time.perf_counter(),
+        "resolved_mode": resolved_mode,
+        "web_search_enabled": web_enabled,
     }
 
 
-def _adjacent_summaries(
-    topics: list[TopicNode], index: int
-) -> tuple[str, str]:
-    """Return (prev_summary, next_summary) for the topic at *index*."""
-    prev_summary = (
-        topics[index - 1].summary_for_context
-        if index > 0
-        else "Start"
+def route_optional_research(state: CourseState, runtime: Any = None) -> str:
+    """Route to researcher_node if web search is enabled and report is missing."""
+    if state.get("web_search_enabled") and not state.get("research_report_id"):
+        return "researcher_node"
+    return "outline_planner_node"
+
+
+async def researcher_node(
+    state: CourseState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Run research pipeline when web search is enabled."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+
+    llm_ctx = _get_llm_context(runtime)
+    search_ctx = _get_search_context(runtime)
+
+    logger.info("Executing research node for session %s", session_id)
+    report_id = state.get("research_report_id")
+    degraded = state.get("degraded", False)
+
+    if not report_id:
+        try:
+            report_id, is_degraded = await run_research(
+                session_id=session_id,
+                topic_query=state["query"],
+                llm_context=llm_ctx,
+                search_context=search_ctx,
+            )
+            degraded = is_degraded
+        except Exception as exc:
+            logger.warning("Research failed for session %s, degrading: %s", session_id, exc)
+            degraded = True
+            report_id = None
+
+    generation_job_store.update_stage(session_id, GenerationStage.OUTLINING)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=GenerationStage.OUTLINING,
+        message="Research complete, proceeding to outline planning",
     )
-    next_summary = (
-        topics[index + 1].summary_for_context
-        if index < len(topics) - 1
-        else "End"
+
+    return {
+        "research_report_id": report_id,
+        "degraded": degraded,
+    }
+
+
+async def outline_planner_node(
+    state: CourseState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Generate CourseOutline TOC and persist topic skeletons into SQLite."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+
+    llm_ctx = _get_llm_context(runtime)
+    mode = state.get("resolved_mode") or "lite"
+
+    report_context: Optional[str] = None
+    report_id = state.get("research_report_id")
+    if report_id:
+        report_context = research_store.get_report_context(report_id, max_bytes=8000)
+
+    logger.info("Generating TOC outline for session %s (mode=%s)", session_id, mode)
+    outline: CourseOutline = await planner_agent.plan(
+        query=state["query"],
+        research_context=report_context,
+        llm_context=llm_ctx,
+        mode=mode,  # type: ignore[arg-type]
     )
-    return prev_summary, next_summary
+
+    generation_artifact_store.persist_outline(session_id, outline)
+
+    generation_job_store.update_stage(session_id, GenerationStage.PLANNING_PREVIEW)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=GenerationStage.PLANNING_PREVIEW,
+        message=f"Outline created with {len(outline.topics)} topics",
+    )
+
+    return {
+        "topic_count": len(outline.topics),
+        "next_topic_index": 0,
+    }
+
+
+async def plan_brief_batch_node(
+    state: CourseState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Plan generation briefs for current batch (3 preview or up to 10 standard)."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+
+    llm_ctx = _get_llm_context(runtime)
+    cursor = state.get("next_topic_index", 0)
+    total_topics = state.get("topic_count", generation_artifact_store.count_topics(session_id))
+
+    batch = select_topic_batch(cursor, total_topics)
+    stage_plan = GenerationStage.PLANNING_PREVIEW if batch.start == 0 else GenerationStage.PLANNING_BATCH
+
+    generation_job_store.update_stage(session_id, stage_plan)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=stage_plan,
+        message=f"Planning briefs for topics {batch.start} to {batch.start + batch.size - 1}",
+    )
+
+    outline = generation_artifact_store.get_outline(session_id)
+
+    web_enabled = state.get("web_search_enabled", False)
+    degraded = state.get("degraded", False)
+
+    if not web_enabled:
+        grounding_status = GroundingStatus.DISABLED
+        research_context = None
+    elif degraded:
+        grounding_status = GroundingStatus.DEGRADED
+        research_context = None
+    else:
+        grounding_status = GroundingStatus.GROUNDED
+        report_id = state.get("research_report_id")
+        research_context = research_store.get_report_context(report_id, max_bytes=8000) if report_id else None
+
+    logger.info("Planning brief batch for session %s (start=%s, size=%s)", session_id, batch.start, batch.size)
+
+    try:
+        brief_batch = await planner_agent.plan_briefs(
+            outline=outline,
+            start_index=batch.start,
+            batch_size=batch.size,
+            research_context=research_context,
+            grounding_status=grounding_status,
+            llm_context=llm_ctx,
+            mode=state.get("resolved_mode") or "lite",  # type: ignore[arg-type]
+        )
+    except ResumablePlannerError as exc:
+        logger.error("Planner brief validation failed for session %s: %s", session_id, exc)
+        raise ResumableGenerationError(f"Brief generation failed: {exc}") from exc
+
+    generation_artifact_store.persist_briefs(session_id, brief_batch)
+
+    stage_gen = GenerationStage.GENERATING_PREVIEW if batch.start == 0 else GenerationStage.GENERATING_BATCH
+    generation_job_store.update_stage(session_id, stage_gen)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=stage_gen,
+        message=f"Generating content for batch starting at {batch.start}",
+    )
+
+    return {
+        "active_batch_start": batch.start,
+        "active_batch_size": batch.size,
+    }
 
 
 def fan_out_generators(state: CourseState) -> list[Send]:
-    """Fan out one Send packet per topic for parallel content generation."""
-    outline_data = state.get("outline")
-    session_data = state.get("session")
-    assert outline_data is not None, "outline required in state"
-    assert session_data is not None, "session required in state"
-    outline = CourseOutline(**outline_data)
-    session_id = session_data["id"]
+    """Fan out one Send packet per topic in active batch to generator_node."""
+    job_id = state["job_id"]
+    session_id = state["session_id"]
+    start = state["active_batch_start"]
+    size = state["active_batch_size"]
+
     sends: list[Send] = []
-
-    for index, topic in enumerate(outline.topics):
-        if index >= 3:
-            continue
-        if topic.index != index:
-            logger.warning(
-                "Topic index mismatch: list index does not match topic index",
-                extra={
-                    "session_id": session_id,
-                    "list_index": index,
-                    "topic_index": topic.index,
-                    "topic_title": topic.title,
-                },
-            )
-
-        prev_summary, next_summary = _adjacent_summaries(
-            outline.topics, index
-        )
+    for index in range(start, start + size):
         sends.append(
             Send(
                 "generator_node",
                 {
-                    "topic_data": topic.model_dump(),
-                    "prev_summary": prev_summary,
-                    "next_summary": next_summary,
+                    "job_id": job_id,
                     "session_id": session_id,
+                    "batch_start": start,
                     "sequence_index": index,
                 },
             )
         )
-
-    return sends
-
-
-def fan_out_quizzers(state: CourseState) -> list[Send]:
-    """Fan out one Send per generator result for parallel quiz generation."""
-    generator_results = state.get("generator_results", [])
-    sends: list[Send] = []
-
-    for result in generator_results:
-        sends.append(
-            Send(
-                "quizzer_node",
-                {
-                    "topic_data": result["topic_data"],
-                    "content_markdown": result["content_markdown"],
-                    "sequence_index": result["sequence_index"],
-                    "session_id": result["session_id"],
-                    "error_message": result["error_message"],
-                },
-            )
-        )
-
     return sends
 
 
 async def generator_node(
-    state: CourseState,
-    runtime: Runtime[CourseGraphContext] | dict[str, Any],
+    state: GeneratorWorkerState,
+    runtime: Any = None,
 ) -> dict[str, list[GeneratorResult]]:
-    """Generate content for one topic. Pure — no DB writes."""
-    llm_context = _get_llm_context(runtime)
-    topic_data = state.get("topic_data")
-    session_id = str(state.get("session_id", ""))
-    sequence_index = int(state.get("sequence_index", 0))
-    assert topic_data is not None, "topic_data required in state"
-    topic = TopicNode(**topic_data)
-    prev_summary = state.get("prev_summary", "Start")
-    next_summary = state.get("next_summary", "End")
-    start_time = time.perf_counter()
+    """Generate educational explanation content for a single topic node."""
+    session_id = state["session_id"]
+    seq_idx = state["sequence_index"]
+    batch_start = state["batch_start"]
+    raise_if_cancel_requested(session_id)
 
-    content: GeneratedContent = await generator_agent.generate_explanation(
-        topic=topic,
-        prev_summary=prev_summary if prev_summary != "Start" else None,
-        next_summary=next_summary if next_summary != "End" else None,
-        llm_context=llm_context,
-    )
+    llm_ctx = _get_llm_context(runtime)
+    node_id = generation_artifact_store._node_id_for_topic(session_id, seq_idx) if hasattr(generation_artifact_store, "_node_id_for_topic") else f"node-{seq_idx}"
 
-    generation_ms = (time.perf_counter() - start_time) * 1000
-    return {
-        "generator_results": [
-            {
-                "topic_data": topic_data,
-                "content_markdown": content.content_markdown,
-                "generation_ms": generation_ms,
-                "error_message": None,
-                "sequence_index": sequence_index,
-                "session_id": session_id,
-            }
-        ]
-    }
+    try:
+        topic = generation_artifact_store.get_topic(session_id, seq_idx)
+        brief = generation_artifact_store.get_brief(node_id)
+        prev_summary, next_summary = generation_artifact_store.get_adjacent_summaries(session_id, seq_idx)
+
+        content: GeneratedContent = await generator_agent.generate_explanation(
+            topic=topic,
+            brief=brief,
+            prev_summary=prev_summary,
+            next_summary=next_summary,
+            llm_context=llm_ctx,
+        )
+
+        learning_manager.update_node_content(
+            node_id=node_id,
+            content_markdown=content.content_markdown,
+            status=NodeStatus.GENERATING,
+        )
+
+        return {
+            "generator_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "content_ready": True,
+                    "error_message": None,
+                }
+            ]
+        }
+    except GenerationCancelled:
+        raise
+    except Exception as exc:
+        logger.exception("Generator failed for session %s index %s: %s", session_id, seq_idx, exc)
+        learning_manager.update_node_content(
+            node_id=node_id,
+            content_markdown="Content generation failed.",
+            status=NodeStatus.ERROR,
+            error_message=str(exc),
+            retry_available=True,
+            failed_step=FailedStep.GENERATOR,
+        )
+        return {
+            "generator_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "content_ready": False,
+                    "error_message": str(exc),
+                }
+            ]
+        }
+
+
+async def prepare_quiz_batch_node(
+    state: CourseState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Fan-in barrier after all generator sends complete for active batch."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+    return {}
+
+
+def fan_out_quizzers(state: CourseState) -> list[Send]:
+    """Fan out one Send packet per topic in active batch to quizzer_node."""
+    job_id = state["job_id"]
+    session_id = state["session_id"]
+    start = state["active_batch_start"]
+    size = state["active_batch_size"]
+
+    sends: list[Send] = []
+    for index in range(start, start + size):
+        sends.append(
+            Send(
+                "quizzer_node",
+                {
+                    "job_id": job_id,
+                    "session_id": session_id,
+                    "batch_start": start,
+                    "sequence_index": index,
+                },
+            )
+        )
+    return sends
 
 
 async def quizzer_node(
-    state: CourseState,
-    runtime: Runtime[CourseGraphContext] | dict[str, Any],
+    state: QuizzerWorkerState,
+    runtime: Any = None,
 ) -> dict[str, list[TopicResult]]:
-    """Generate quiz and persist concept node. Handles both success and error cases."""
-    llm_context = _get_llm_context(runtime)
-    topic_data = state.get("topic_data")
-    session_id = str(state.get("session_id", ""))
-    sequence_index = int(state.get("sequence_index", 0))
-    content_markdown = state.get("content_markdown", "")
-    generator_error = state.get("error_message")
-    assert topic_data is not None, "topic_data required in state"
-    topic = TopicNode(**topic_data)
-    start_time = time.perf_counter()
+    """Generate diagnostic quizzes and finalize topic node status."""
+    session_id = state["session_id"]
+    seq_idx = state["sequence_index"]
+    batch_start = state["batch_start"]
+    raise_if_cancel_requested(session_id)
 
-    if generator_error:
-        return _persist_partial_failure(
-            state=state,
-            topic=topic,
-            session_id=session_id,
-            sequence_index=sequence_index,
-            start_time=start_time,
-            error_message=generator_error,
-            failed_step=FailedStep.GENERATOR,
-            content_markdown="Content generation failed. Retry is available.",
-        )
+    llm_ctx = _get_llm_context(runtime)
+    node = learning_manager.get_concept_node_by_index(session_id, seq_idx) if hasattr(learning_manager, "get_concept_node_by_index") else None
+    if not node:
+        all_nodes = learning_manager.get_session_nodes(session_id)
+        node = next((n for n in all_nodes if n["sequence_index"] == seq_idx), None)
+
+    if not node or node.get("status") == NodeStatus.ERROR.value:
+        return {
+            "topic_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "terminal_status": "ERROR",
+                    "error_message": node.get("error_message") if node else "Node not found",
+                }
+            ]
+        }
 
     try:
+        topic = generation_artifact_store.get_topic(session_id, seq_idx)
+        brief = generation_artifact_store.get_brief(node["id"])
+        content_markdown = node.get("content_markdown") or ""
+
         quiz_set: QuizSet = await quizzer_agent.generate_quiz_set(
             topic=topic,
             content=content_markdown,
             quiz_count=topic.quiz_count,
-            llm_context=llm_context,
+            brief=brief,
+            llm_context=llm_ctx,
         )
-    except asyncio.CancelledError:
+
+        previous_status = None
+        all_nodes = learning_manager.get_session_nodes(session_id)
+        for sibling in all_nodes:
+            if sibling["sequence_index"] == seq_idx - 1:
+                previous_status = sibling["status"]
+
+        new_status = NodeStatus.LOCKED
+        if seq_idx == 0 or previous_status == NodeStatus.COMPLETED.value:
+            new_status = NodeStatus.VIEWING_EXPLANATION
+
+        learning_manager.update_node_content(
+            node_id=node["id"],
+            content_markdown=content_markdown,
+            status=new_status,
+            quiz_set=quiz_set,
+        )
+
+        return {
+            "topic_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "terminal_status": "READY",
+                    "error_message": None,
+                }
+            ]
+        }
+    except GenerationCancelled:
         raise
-    except Exception as quiz_exc:
-        return _persist_partial_failure(
-            state=state,
-            topic=topic,
-            session_id=session_id,
-            sequence_index=sequence_index,
-            start_time=start_time,
-            error_message=str(quiz_exc),
-            failed_step=FailedStep.QUIZZER,
-            content_markdown=content_markdown,
-        )
-
-    initial_status = (
-        NodeStatus.VIEWING_EXPLANATION
-        if sequence_index == 0
-        else NodeStatus.LOCKED
-    )
-    nodes = learning_manager.get_session_nodes(session_id)
-    node_data = next((n for n in nodes if n["sequence_index"] == sequence_index), None)
-    if not node_data:
-        node = learning_manager.create_concept_node(
-            session_id=session_id,
-            sequence_index=sequence_index,
-            title=topic.title,
-            content_markdown=content_markdown,
-            status=initial_status,
-            quiz_set=quiz_set,
-            complexity=topic.complexity,
-            summary_for_context=topic.summary_for_context,
-            key_terms=topic.key_terms,
-        )
-    else:
-        node = learning_manager.update_node_content(
-            node_id=node_data["id"],
-            content_markdown=content_markdown,
-            status=initial_status,
-            quiz_set=quiz_set,
-        )
-    generation_ms = (time.perf_counter() - start_time) * 1000
-    return {
-        "topic_results": [
-            {
-                "node": node,
-                "generation_ms": generation_ms,
-                "error_message": None,
-            }
-        ]
-    }
-
-
-async def generator_error_handler(
-    state: CourseState,
-    error: NodeError,
-) -> dict[str, list[GeneratorResult]]:
-    """Catch generator failure after retries exhausted. Returns error result to state."""
-    logger.error(
-        "Generator error handler caught: %s for topic %s",
-        error.error,
-        state.get("sequence_index"),
-    )
-    topic_data_d = state.get("topic_data", {})
-    sequence_index_d = int(state.get("sequence_index", 0))
-    session_id_d = str(state.get("session_id", ""))
-    return {
-        "generator_results": [
-            {
-                "topic_data": topic_data_d,
-                "content_markdown": "Content generation failed. Retry is available.",
-                "generation_ms": 0.0,
-                "error_message": str(error.error),
-                "sequence_index": sequence_index_d,
-                "session_id": session_id_d,
-            }
-        ]
-    }
-
-
-async def quizzer_error_handler(
-    state: CourseState,
-    error: NodeError,
-) -> dict[str, list[TopicResult]]:
-    """Catch quizzer failure after retries exhausted. Persists ERROR node to DB."""
-    topic_data_e = state.get("topic_data")
-    session_id = str(state.get("session_id", ""))
-    sequence_index = int(state.get("sequence_index", 0))
-    assert topic_data_e is not None, "topic_data required in state"
-    topic = TopicNode(**topic_data_e)
-
-    logger.error(
-        "Quizzer error handler caught: %s for topic %s",
-        error.error,
-        sequence_index,
-    )
-    nodes = learning_manager.get_session_nodes(session_id)
-    node_data = next((n for n in nodes if n["sequence_index"] == sequence_index), None)
-    if not node_data:
-        node = learning_manager.create_concept_node(
-            session_id=session_id,
-            sequence_index=sequence_index,
-            title=topic.title,
-            content_markdown=state.get("content_markdown", ""),
+    except Exception as exc:
+        logger.exception("Quizzer failed for session %s index %s: %s", session_id, seq_idx, exc)
+        learning_manager.update_node_content(
+            node_id=node["id"],
+            content_markdown=node.get("content_markdown") or "",
             status=NodeStatus.ERROR,
-            quiz=None,
-            error_message=str(error.error),
-            retry_available=True,
-            complexity=topic.complexity,
-            summary_for_context=topic.summary_for_context,
-            key_terms=topic.key_terms,
-            failed_step=FailedStep.QUIZZER,
-        )
-    else:
-        node = learning_manager.update_node_content(
-            node_id=node_data["id"],
-            content_markdown=state.get("content_markdown", ""),
-            status=NodeStatus.ERROR,
-            error_message=str(error.error),
+            error_message=str(exc),
             retry_available=True,
             failed_step=FailedStep.QUIZZER,
         )
-    return {
-        "topic_results": [
-            {
-                "node": node,
-                "generation_ms": 0.0,
-                "error_message": str(error.error),
-            }
-        ]
-    }
+        return {
+            "topic_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "terminal_status": "ERROR",
+                    "error_message": str(exc),
+                }
+            ]
+        }
 
 
-def _persist_partial_failure(
+async def advance_batch_node(
     state: CourseState,
-    topic: TopicNode,
-    session_id: str,
-    sequence_index: int,
-    start_time: float,
-    error_message: str,
-    failed_step: FailedStep,
-    content_markdown: str,
-) -> dict[str, list[TopicResult]]:
-    generation_ms = (time.perf_counter() - start_time) * 1000
-    logger.error(
-        "Failed to generate concept unit for topic %s '%s' (step=%s): %s",
-        sequence_index,
-        topic.title,
-        failed_step.value,
-        error_message,
-    )
-    nodes = learning_manager.get_session_nodes(session_id)
-    node_data = next((n for n in nodes if n["sequence_index"] == sequence_index), None)
-    if not node_data:
-        node = learning_manager.create_concept_node(
-            session_id=session_id,
-            sequence_index=sequence_index,
-            title=topic.title,
-            content_markdown=content_markdown,
-            status=NodeStatus.ERROR,
-            quiz=None,
-            error_message=error_message,
-            retry_available=True,
-            complexity=topic.complexity,
-            summary_for_context=topic.summary_for_context,
-            key_terms=topic.key_terms,
-            failed_step=failed_step,
-        )
-    else:
-        node = learning_manager.update_node_content(
-            node_id=node_data["id"],
-            content_markdown=content_markdown,
-            status=NodeStatus.ERROR,
-            error_message=error_message,
-            retry_available=True,
-            failed_step=failed_step,
-        )
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Advance batch cursor after all fan-out workers complete for active batch."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+
+    start = state["active_batch_start"]
+    size = state["active_batch_size"]
+    next_index = start + size
+
+    generation_job_store.update_progress(session_id, next_index)
+
     return {
-        "topic_results": [
-            {
-                "node": node,
-                "generation_ms": generation_ms,
-                "error_message": error_message,
-            }
-        ]
+        "next_topic_index": next_index,
     }
+
+
+def route_next_batch(state: CourseState, runtime: Any = None) -> str:
+    """Route to plan_next for subsequent brief batches or finalize when complete."""
+    if state["next_topic_index"] < state["topic_count"]:
+        return "plan_next"
+    return "finalize"
+
+
+async def finalize_generation_node(
+    state: CourseState,
+    runtime: Any = None,
+) -> dict[str, Any]:
+    """Mark generation job complete and record terminal progress event."""
+    session_id = state["session_id"]
+    raise_if_cancel_requested(session_id)
+
+    topic_results = state.get("topic_results", [])
+    has_errors = any(item.get("terminal_status") == "ERROR" for item in topic_results)
+    degraded = state.get("degraded", False) or has_errors
+
+    final_stage = GenerationStage.COMPLETE_DEGRADED if degraded else GenerationStage.COMPLETE
+
+    generation_job_store.update_stage(session_id, final_stage)
+    progress_event_store.append_once(
+        session_id=session_id,
+        event_type=ProgressEventType.STAGE_CHANGED,
+        stage=final_stage,
+        message=f"Course generation completed ({final_stage.value})",
+    )
+
+    logger.info("Generation job finalized for session %s with stage %s", session_id, final_stage.value)
+    return {}
 
 
 def build_response_node(state: CourseState) -> dict[str, Any]:
-    """Build final response payload and old orchestrator-compatible metrics."""
-    now = time.perf_counter()
-    topic_results = state.get("topic_results", [])
-    sorted_results = sorted(
-        topic_results,
-        key=lambda item: item["node"].get("sequence_index", 0),
-    )
-    nodes = [item["node"] for item in sorted_results]
-
-    serial_estimate_ms = sum(
-        float(item.get("generation_ms", 0.0)) for item in sorted_results
-    )
-    parallel_start = state.get("parallel_start_time", now)
-    total_start = state.get("total_start_time", now)
-    parallel_ms = (now - parallel_start) * 1000
-    total_ms = (now - total_start) * 1000
-    latency_savings_ms = max(serial_estimate_ms - parallel_ms, 0.0)
-    success_count = sum(
-        1 for node in nodes if node.get("status") != NodeStatus.ERROR.value
-    )
-    failure_count = len(nodes) - success_count
-
-    session_data_b = state.get("session", {})
-    session = dict(session_data_b)
-    session["total_nodes"] = len(nodes)
-    session["completed_nodes"] = 0
-
-    metrics = {
-        "planner_ms": round(state.get("planner_ms", 0.0), 2),
-        "parallel_ms": round(parallel_ms, 2),
-        "serial_estimate_ms": round(serial_estimate_ms, 2),
-        "latency_savings_ms": round(latency_savings_ms, 2),
-        "total_ms": round(total_ms, 2),
-        "cards_success": success_count,
-        "cards_failed": failure_count,
-    }
-
-    logger.info(
-        "Course generation complete",
-        extra={"session_id": session["id"], **metrics},
-    )
-
-    return {
-        "session": session,
-        "nodes": nodes,
-        "metrics": metrics,
-    }
+    """Legacy helper for backward compatibility."""
+    return {}

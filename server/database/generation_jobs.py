@@ -750,3 +750,39 @@ class GenerationJobStore:
         if paused:
             logger.info("Paused %d orphaned generation jobs", len(paused))
         return paused
+
+    def update_stage(
+        self,
+        session_id: str,
+        stage: GenerationStage,
+    ) -> None:
+        """Update job stage without requiring a worker lock."""
+        with optional_transaction(self.db_path, None) as conn:
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET stage = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (stage.value, _utc_now().isoformat(), session_id),
+            )
+
+    def update_progress(
+        self,
+        session_id: str,
+        completed_topics: int,
+    ) -> None:
+        """Update cursor completed topics for session."""
+        with optional_transaction(self.db_path, None) as conn:
+            cursor_json = canonical_json(GenerationCursor(completed_topics=completed_topics))
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET cursor_json = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (cursor_json, _utc_now().isoformat(), session_id),
+            )
+
+
+generation_job_store = GenerationJobStore()
