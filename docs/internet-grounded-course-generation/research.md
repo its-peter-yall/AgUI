@@ -5,7 +5,7 @@
 
 ## Commit
 
-*(filled after git commit)*
+- `61ccbdc55c4e9caec47de207594e6ed854061dda` — docs: research internet-grounded course generation
 
 ---
 
