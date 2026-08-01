@@ -140,7 +140,7 @@ describe("TableOfContentsModal Component", () => {
 
 		// Check quiz counts
 		expect(screen.getByText("2")).toBeDefined(); // HTML has 2 quizzes
-		expect(screen.getAllByText("3").length).toBe(2); // CSS has 3 quizzes (explicit), Promises fallback to 3 quizzes (Advanced complexity)
+		expect(screen.getByText("3")).toBeDefined(); // CSS has 3 quizzes
 	});
 
 	test("calls onSelectTopic when an unlocked topic name is clicked", () => {

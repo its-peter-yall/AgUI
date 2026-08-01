@@ -34,12 +34,24 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
+import { BookOpen } from "lucide-react";
 import { LearningPathContainer } from "./LearningPathContainer";
+import { GenerationStatusPanel } from "./GenerationStatusPanel";
+import { CourseSourcesPanel } from "./CourseSourcesPanel";
 import { SettingsButton } from "@/components/SettingsButton";
-import { getLearningSession } from "@/lib/learningApi";
+import {
+	cancelGeneration,
+	deleteSession,
+	getCourseResearch,
+	getLearningSession,
+	resumeGeneration,
+} from "@/lib/learningApi";
+import { hasWebSearchCapability } from "@/lib/providerSettings";
 import { cn } from "@/lib/utils";
+import type { LearningSessionWithNodes } from "@/types/learning";
+import type { ResearchReport } from "@/types/generation";
 import {
 	isTerminalGenerationStage,
 	useSessionEvents,
@@ -53,6 +65,8 @@ export function LearningPage() {
 		null,
 	);
 	const [showResumeBanner, setShowResumeBanner] = useState(false);
+	const [sourcesOpen, setSourcesOpen] = useState(false);
+	const [controlError, setControlError] = useState<string | null>(null);
 	const modalRef = useRef<HTMLDivElement>(null);
 	const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -85,6 +99,126 @@ export function LearningPage() {
 		!!session?.generation &&
 		!isTerminalGenerationStage(session.generation.stage);
 	useSessionEvents(sessionId, generationActive);
+
+	const webRequested = !!session?.generation?.web_search_requested;
+	const researchQuery = useQuery({
+		queryKey: ["courseResearch", sessionId],
+		queryFn: () => getCourseResearch(sessionId!),
+		enabled: !!sessionId && webRequested && (sourcesOpen || webRequested),
+		staleTime: 0,
+		refetchInterval: (query) => {
+			const status = query.state.data?.status;
+			if (status === "PENDING" || status === "RESEARCHING") {
+				return 2000;
+			}
+			return false;
+		},
+	});
+
+	const mergeGeneration = useCallback(
+		(generation: NonNullable<LearningSessionWithNodes["generation"]>) => {
+			if (!sessionId) return;
+			queryClient.setQueryData<LearningSessionWithNodes>(
+				["learningSession", sessionId],
+				(prev) => (prev ? { ...prev, generation } : prev),
+			);
+		},
+		[queryClient, sessionId],
+	);
+
+	const cancelMutation = useMutation({
+		mutationFn: () => cancelGeneration(sessionId!),
+		onSuccess: (data) => {
+			mergeGeneration(data.generation);
+			setControlError(null);
+		},
+		onError: (err) => {
+			if (axios.isAxiosError(err)) {
+				const detail = err.response?.data?.detail;
+				if (
+					typeof detail === "string" &&
+					(err.response?.status === 400 || err.response?.status === 409)
+				) {
+					setControlError(detail);
+					return;
+				}
+			}
+			setControlError("Could not stop generation. Please try again.");
+		},
+	});
+
+	const resumeMutation = useMutation({
+		mutationFn: async () => {
+			const needsSearch =
+				!!session?.generation?.web_search_requested &&
+				session.generation.grounding_status !== "GROUNDED" &&
+				session.generation.grounding_status !== "DISABLED";
+			if (needsSearch && !hasWebSearchCapability()) {
+				throw new Error(
+					"Web search capability required. Configure a provider in Settings, then resume.",
+				);
+			}
+			return resumeGeneration(sessionId!, {
+				webSearchEnabled: needsSearch,
+			});
+		},
+		onSuccess: (data) => {
+			mergeGeneration(data.generation);
+			setControlError(null);
+			void queryClient.invalidateQueries({
+				queryKey: ["learningSession", sessionId],
+			});
+		},
+		onError: (err) => {
+			if (err instanceof Error && err.message.includes("Web search")) {
+				setControlError(err.message);
+				return;
+			}
+			if (axios.isAxiosError(err)) {
+				const detail = err.response?.data?.detail;
+				if (
+					typeof detail === "string" &&
+					(err.response?.status === 400 || err.response?.status === 409)
+				) {
+					setControlError(detail);
+					return;
+				}
+			}
+			setControlError("Could not resume generation. Please try again.");
+		},
+	});
+
+	const deleteMutation = useMutation({
+		mutationFn: () => deleteSession(sessionId!),
+		onSuccess: async () => {
+			await queryClient.cancelQueries({
+				queryKey: ["learningSession", sessionId],
+			});
+			await queryClient.cancelQueries({
+				queryKey: ["courseResearch", sessionId],
+			});
+			queryClient.removeQueries({
+				queryKey: ["learningSession", sessionId],
+			});
+			queryClient.removeQueries({
+				queryKey: ["courseResearch", sessionId],
+			});
+			void queryClient.invalidateQueries({ queryKey: ["courses"] });
+			navigate("/learn");
+		},
+		onError: () => {
+			setControlError("Could not delete course. Please try again.");
+		},
+	});
+
+	const handleDelete = useCallback(() => {
+		const ok = window.confirm(
+			"Permanently delete this course and all artifacts? This cannot be undone.",
+		);
+		if (ok) {
+			deleteMutation.mutate();
+		}
+	}, [deleteMutation]);
 
 	// Invalidate course list on unmount so dashboard is fresh
 	useEffect(() => {
@@ -271,9 +405,28 @@ export function LearningPage() {
 							</h1>
 						)}
 						<nav
-							className="flex items-center gap-4"
+							className="flex items-center gap-2 sm:gap-4"
 							aria-label="Main navigation"
 						>
+							{(webRequested || researchQuery.data) && (
+								<button
+									type="button"
+									onClick={() => setSourcesOpen(true)}
+									className={cn(
+										"inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors",
+										"focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded-md px-2 py-1",
+									)}
+									aria-label="View course sources"
+								>
+									<BookOpen className="h-4 w-4" aria-hidden="true" />
+									<span className="hidden sm:inline">Sources</span>
+								</button>
+							)}
+							{session?.generation?.grounding_status === "GROUNDED" && (
+								<span className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+									Web grounded
+								</span>
+							)}
 							<Link
 								to="/learn?new=true"
 								className={cn(
@@ -286,6 +439,24 @@ export function LearningPage() {
 							<SettingsButton />
 						</nav>
 					</div>
+					{session?.generation && (
+						<div className="pb-3">
+							<GenerationStatusPanel
+								generation={session.generation}
+								onCancel={() => cancelMutation.mutate()}
+								onResume={() => resumeMutation.mutate()}
+								onDelete={handleDelete}
+								isCancelling={cancelMutation.isPending}
+								isResuming={resumeMutation.isPending}
+								isDeleting={deleteMutation.isPending}
+							/>
+							{controlError && (
+								<p className="mt-2 text-xs text-destructive" role="alert">
+									{controlError}
+								</p>
+							)}
+						</div>
+					)}
 				</div>
 			</header>
 
@@ -305,13 +476,19 @@ export function LearningPage() {
 					sessionId={sessionId}
 					session={session ?? undefined}
 					initialNodeId={session?.last_active_node_id ?? undefined}
-					onCourseGenerated={(session) => {
-						document.title = `Learn: ${session.course_title}`;
-						// Refetch to update progress bar
+					onOpenSources={() => setSourcesOpen(true)}
+					onCourseGenerated={(nextSession) => {
+						document.title = `Learn: ${nextSession.course_title}`;
 						refetch();
 					}}
 				/>
 			</main>
+
+			<CourseSourcesPanel
+				isOpen={sourcesOpen}
+				onClose={() => setSourcesOpen(false)}
+				report={researchQuery.data as ResearchReport | undefined}
+			/>
 
 			{/* Course completion overlay - accessible modal */}
 			{showCompletion && (

@@ -165,14 +165,22 @@ export function TableOfContentsModal({
 							<tbody className="divide-y divide-border/40 overflow-y-auto block max-h-[480px] w-full scrollbar-thin">
 								{nodes.map((node, index) => {
 									const isCurrent = node.id === currentNodeId;
-									const isLocked = node.status === "LOCKED";
+									const moduleStatus = node.module_status ?? "READY";
+									const isGeneratingModule =
+										moduleStatus === "SKELETON" || moduleStatus === "GENERATING";
+									const isLocked =
+										node.status === "LOCKED" && !isGeneratingModule;
 									const isCompleted = node.status === "COMPLETED";
 									const numQuizzes = getNumQuizzes(node);
 
 									let statusLabel = "In Progress";
 									let statusBadgeClass = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
 									let statusIcon = <PlayCircle className="w-4 h-4" />;
-									if (isLocked) {
+									if (isGeneratingModule) {
+										statusLabel = "Generating";
+										statusBadgeClass = "bg-[#ffb74d]/10 text-[#ffb74d] border border-[#ffb74d]/30";
+										statusIcon = <HelpCircle className="w-4 h-4" />;
+									} else if (isLocked) {
 										statusLabel = "Locked";
 										statusBadgeClass = "bg-zinc-800/50 text-zinc-500 border border-zinc-700/30";
 										statusIcon = <Lock className="w-4 h-4" />;
@@ -180,7 +188,7 @@ export function TableOfContentsModal({
 										statusLabel = "Mastered";
 										statusBadgeClass = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
 										statusIcon = <CheckCircle2 className="w-4 h-4" />;
-									} else if (node.status === "ERROR") {
+									} else if (node.status === "ERROR" || moduleStatus === "ERROR") {
 										statusLabel = "In Progress";
 										statusIcon = <HelpCircle className="w-4 h-4" />;
 									}

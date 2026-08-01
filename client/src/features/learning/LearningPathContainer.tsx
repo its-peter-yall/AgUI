@@ -66,7 +66,9 @@ import { ChatPanel } from "./ChatPanel";
 import { LearningErrorBoundary } from "./LearningErrorBoundary";
 import { MasteryCelebration } from "./animations/MasteryCelebration";
 import { ProgressBar } from "./ProgressBar";
+import { SkeletonCard } from "./SkeletonCard";
 import { TableOfContentsModal } from "./TableOfContentsModal";
+import { isTerminalGenerationStage } from "./generationEvents";
 import {
 	carouselSlideVariants,
 	carouselSlideReducedMotionVariants,
@@ -95,6 +97,8 @@ interface LearningPathContainerProps {
 	initialNodeId?: string;
 	/** Callback when course generation completes */
 	onCourseGenerated?: (session: LearningSessionWithNodes) => void;
+	/** Open course sources panel */
+	onOpenSources?: () => void;
 }
 
 type CelebrationState = {
@@ -111,6 +115,7 @@ export function LearningPathContainer({
 	userId,
 	initialNodeId,
 	onCourseGenerated,
+	onOpenSources,
 }: LearningPathContainerProps) {
 	const queryClient = useQueryClient();
 	const [generatedSessionId, setGeneratedSessionId] = useState<
@@ -274,10 +279,38 @@ export function LearningPathContainer({
 	// Use provided session or fetched session
 	const session = sessionProp ?? fetchedSession;
 
-	// Generate new course mutation
+	// Generate new course mutation (legacy query-prop path)
 	const generateMutation = useMutation({
-		mutationFn: (data: GenerateCourseRequest) => generateCourse(data),
-		onSuccess: (data) => {
+		mutationFn: (data: GenerateCourseRequest) =>
+			generateCourse(data, { webSearchEnabled: false }),
+		onSuccess: (accepted) => {
+			const shell = accepted.session;
+			const data: LearningSessionWithNodes = {
+				id: String(shell.id),
+				user_id: null,
+				query: String(shell.query ?? ""),
+				course_title: String(shell.course_title ?? shell.query ?? ""),
+				total_nodes:
+					typeof shell.total_nodes === "number" ? shell.total_nodes : 0,
+				completed_nodes:
+					typeof shell.completed_nodes === "number"
+						? shell.completed_nodes
+						: 0,
+				last_active_node_id: null,
+				title_finalized:
+					typeof shell.title_finalized === "boolean"
+						? shell.title_finalized
+						: false,
+				created_at:
+					typeof shell.created_at === "string"
+						? shell.created_at
+						: new Date().toISOString(),
+				updated_at: null,
+				nodes: Array.isArray(shell.nodes)
+					? (shell.nodes as LearningSessionWithNodes["nodes"])
+					: [],
+				generation: accepted.generation,
+			};
 			setGeneratedSessionId(data.id);
 			queryClient.setQueryData(["learningSession", data.id], data);
 			onCourseGenerated?.(data);
@@ -688,7 +721,27 @@ export function LearningPathContainer({
 		);
 	}
 
+	const generationRunning =
+		!!session.generation &&
+		!isTerminalGenerationStage(session.generation.stage);
+
 	if (session.nodes.length === 0) {
+		if (generationRunning || session.generation) {
+			return (
+				<>
+					<div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+						<p className="text-sm font-medium text-foreground">
+							Preparing your course outline...
+						</p>
+						<p className="text-xs text-muted-foreground max-w-md">
+							Research and table of contents will appear as generation
+							progresses.
+						</p>
+					</div>
+					<ToastContainer toasts={toasts} onDismiss={dismissToast} />
+				</>
+			);
+		}
 		return (
 			<>
 				<EmptyState
@@ -830,34 +883,60 @@ export function LearningPathContainer({
 														aria-hidden="true"
 													/>
 												)}
-												<ConceptCard
-													node={currentSlideNode}
-													onOpenTOC={() => setIsTOCOpen(true)}
-													isActive={currentSlideNode.id === activeNodeId}
-													quizResult={quizResults[currentSlideNode.id]}
-													onProceedToQuiz={handleProceedToQuiz}
-													onQuizSubmit={submitAnswer}
-													onRetryQuiz={retry}
-													onContinueToNext={handleContinueToNext}
-													onNextQuiz={() =>
-														advanceToNextQuiz(currentSlideNode.id)
-													}
-													onPreviousQuiz={goToPreviousQuiz}
-													onRegenerate={regenerate}
-													isRegenerating={isRegenerating}
-													isTransitioning={isTransitioning}
-													canSkip={canGoNext}
-													onSkipNode={() => {
-														if (canGoNext) {
-															goToNext();
+												{(() => {
+												const moduleStatus =
+													currentSlideNode.module_status ?? "READY";
+												const genStage = session.generation?.stage;
+												const skeletonStatic =
+													genStage === "CANCELLED" ||
+													genStage === "PAUSED" ||
+													!generationRunning;
+												if (
+													moduleStatus === "SKELETON" ||
+													moduleStatus === "GENERATING"
+												) {
+													return (
+														<SkeletonCard
+															title={currentSlideNode.title}
+															sequenceIndex={currentSlideNode.sequence_index}
+															animated={
+																moduleStatus === "GENERATING" && !skeletonStatic
+															}
+														/>
+													);
+												}
+												return (
+													<ConceptCard
+														node={currentSlideNode}
+														onOpenTOC={() => setIsTOCOpen(true)}
+														onViewSources={onOpenSources}
+														isActive={currentSlideNode.id === activeNodeId}
+														quizResult={quizResults[currentSlideNode.id]}
+														onProceedToQuiz={handleProceedToQuiz}
+														onQuizSubmit={submitAnswer}
+														onRetryQuiz={retry}
+														onContinueToNext={handleContinueToNext}
+														onNextQuiz={() =>
+															advanceToNextQuiz(currentSlideNode.id)
 														}
-													}}
-													onPrevious={goToPrev}
-													canPrevious={canGoPrev}
-													selectedHeadingIds={selectedHeadingIds}
-													onToggleHeadingChat={handleToggleHeadingChat}
-													onAskQuestion={handleAskQuestion}
-												/>
+														onPreviousQuiz={goToPreviousQuiz}
+														onRegenerate={regenerate}
+														isRegenerating={isRegenerating}
+														isTransitioning={isTransitioning}
+														canSkip={canGoNext}
+														onSkipNode={() => {
+															if (canGoNext) {
+																goToNext();
+															}
+														}}
+														onPrevious={goToPrev}
+														canPrevious={canGoPrev}
+														selectedHeadingIds={selectedHeadingIds}
+														onToggleHeadingChat={handleToggleHeadingChat}
+														onAskQuestion={handleAskQuestion}
+													/>
+												);
+											})()}
 											</motion.div>
 										)}
 									</AnimatePresence>

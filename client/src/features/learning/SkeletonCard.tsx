@@ -5,29 +5,22 @@
  * ============================================================================
  *
  * PURPOSE:
- *    Skeleton loader component displaying animated placeholder content while
- *    a concept node is being generated. Matches ConceptCard layout for smooth
- *    transitions when content loads.
+ *    Topic-aware skeleton for progressive module generation.
  *
  * ROLE IN PROJECT:
- *    Loading-state UI within the learning feature. Used by LearningPathContainer
- *    and ErrorStates during the scatter-gather generation process to provide
- *    visual feedback without layout shift.
+ *    Loading-state UI for SKELETON/GENERATING modules. Static when paused or
+ *    cancelled; animated while actively generating.
  *
  * KEY COMPONENTS:
- *    - SkeletonCard: Single card skeleton matching ConceptCard layout
- *    - SkeletonPath: Multiple skeleton cards in a column
+ *    - SkeletonCard: Single titled skeleton
+ *    - SkeletonPath: Multiple skeleton cards
  *
  * DEPENDENCIES:
- *    - External: tailwindcss (animate-pulse)
- *    - Internal: @/lib/utils (cn)
+ *    - External: None
+ *    - Internal: @/lib/utils
  *
  * USAGE:
- *    ```tsx
- *    <SkeletonCard />
- *
- *    <SkeletonPath count={5} />
- *    ```
+ *    <SkeletonCard title="Topic" sequenceIndex={0} animated />
  * ============================================================================
  */
 
@@ -35,30 +28,53 @@ import { cn } from '@/lib/utils';
 
 interface SkeletonCardProps {
   className?: string;
+  title?: string;
+  sequenceIndex?: number;
+  animated?: boolean;
 }
 
-export function SkeletonCard({ className }: SkeletonCardProps) {
+export function SkeletonCard({
+  className,
+  title,
+  sequenceIndex,
+  animated = true,
+}: SkeletonCardProps) {
+  const label =
+    title && title.trim().length > 0
+      ? title
+      : sequenceIndex !== undefined
+        ? `Topic ${sequenceIndex + 1}`
+        : 'Loading content...';
+
   return (
     <div
       className={cn(
-        'border rounded-lg bg-card animate-pulse',
-        className
+        'border rounded-lg bg-card',
+        animated && 'animate-pulse',
+        className,
       )}
       aria-busy="true"
+      data-module-skeleton={animated ? 'generating' : 'static'}
     >
-      <span className="sr-only">Loading content...</span>
-      
-      {/* Header skeleton */}
+      <span className="sr-only">
+        {animated ? `Generating ${label}` : `Waiting: ${label}`}
+      </span>
+
       <div className="flex items-center gap-3 p-4 border-b">
-        <div className="w-8 h-8 bg-muted rounded-full" />
-        <div className="flex-1 space-y-2">
-          <div className="h-4 bg-muted rounded w-3/4" />
-          <div className="h-3 bg-muted rounded w-1/4" />
+        <div className="w-8 h-8 bg-muted rounded-full shrink-0" />
+        <div className="flex-1 min-w-0">
+          {title ? (
+            <p className="text-sm font-semibold text-foreground truncate">
+              {title}
+            </p>
+          ) : (
+            <div className="h-4 bg-muted rounded w-3/4" />
+          )}
+          <div className="h-3 bg-muted rounded w-1/4 mt-2" />
         </div>
-        <div className="h-4 w-6 bg-muted rounded" />
+        <div className="h-4 w-6 bg-muted rounded shrink-0" />
       </div>
 
-      {/* Body skeleton */}
       <div className="p-4 space-y-3">
         <div className="h-4 bg-muted rounded w-full" />
         <div className="h-4 bg-muted rounded w-5/6" />
@@ -67,7 +83,6 @@ export function SkeletonCard({ className }: SkeletonCardProps) {
         <div className="h-4 bg-muted rounded w-3/4" />
       </div>
 
-      {/* Footer skeleton */}
       <div className="flex justify-end p-4 border-t">
         <div className="h-9 w-32 bg-muted rounded" />
       </div>
@@ -83,7 +98,7 @@ export function SkeletonPath({ count = 5 }: SkeletonPathProps) {
   return (
     <div className="flex flex-col gap-4">
       {Array.from({ length: count }).map((_, i) => (
-        <SkeletonCard key={i} />
+        <SkeletonCard key={i} sequenceIndex={i} />
       ))}
     </div>
   );
