@@ -221,3 +221,95 @@ PREVIEW_BATCH_SIZE = 3
 STANDARD_BATCH_SIZE = 10
 GENERATION_LOCK_HEARTBEAT_SECONDS = 15
 GENERATION_MAX_CONCURRENCY = 3
+
+_NONTERMINAL_ACTIVE_STAGES = frozenset(
+    {
+        GenerationStage.INITIALIZING,
+        GenerationStage.RESEARCHING,
+        GenerationStage.OUTLINING,
+        GenerationStage.PLANNING_PREVIEW,
+        GenerationStage.GENERATING_PREVIEW,
+        GenerationStage.PLANNING_BATCH,
+        GenerationStage.GENERATING_BATCH,
+    }
+)
+_RESUMABLE_STAGES = frozenset(
+    {
+        GenerationStage.PAUSED,
+        GenerationStage.CANCELLED,
+    }
+)
+
+
+class GenerationJobPublic(BaseModel):
+    """Public generation job projection for poll and control responses."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    session_id: str
+    stage: GenerationStage
+    web_search_requested: bool = False
+    grounding_status: GroundingStatus = GroundingStatus.DISABLED
+    counts: GenerationCounts = Field(default_factory=GenerationCounts)
+    warnings: list[GenerationWarning] = Field(default_factory=list)
+    cancel_requested: bool = False
+    can_cancel: bool = False
+    can_resume: bool = False
+    last_event_id: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_job(
+        cls,
+        job: GenerationJobRecord,
+        *,
+        last_event_id: int = 0,
+    ) -> "GenerationJobPublic":
+        """Build public view from a persisted job record."""
+        return cls(
+            id=job.id,
+            session_id=job.session_id,
+            stage=job.stage,
+            web_search_requested=job.web_search_requested,
+            grounding_status=job.grounding_status,
+            counts=job.counts,
+            warnings=job.warnings,
+            cancel_requested=job.cancel_requested,
+            can_cancel=job.stage in _NONTERMINAL_ACTIVE_STAGES,
+            can_resume=job.stage in _RESUMABLE_STAGES,
+            last_event_id=last_event_id,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
+
+
+class GenerateCourseAcceptedResponse(BaseModel):
+    """Immediate 202 acceptance payload for detached course generation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    session: dict
+    generation: GenerationJobPublic
+
+
+class GenerationControlResponse(BaseModel):
+    """Response for cancel/resume control endpoints."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    generation: GenerationJobPublic
+
+
+class GenerationEventEnvelope(BaseModel):
+    """SSE data payload wrapping a progress event and optional job snapshot."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(ge=1)
+    session_id: str
+    event_type: str
+    payload: dict
+    generation: Optional[GenerationJobPublic] = None
+    created_at: datetime

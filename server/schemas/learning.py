@@ -64,6 +64,30 @@ class NodeStatus(str, Enum):
     ERROR = "ERROR"
 
 
+class ModuleGenerationStatus(str, Enum):
+    """Per-module progressive generation status for poll snapshots."""
+
+    SKELETON = "SKELETON"
+    GENERATING = "GENERATING"
+    READY = "READY"
+    ERROR = "ERROR"
+
+
+class PublicNodeCitation(BaseModel):
+    """Validated public citation metadata attached to a concept node."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    source_id: str = Field(..., min_length=1, max_length=100)
+    citation_number: int = Field(..., ge=1)
+    title: str = Field(..., min_length=1, max_length=500)
+    url: str = Field(..., min_length=1, max_length=2000)
+    publisher: Optional[str] = Field(default=None, max_length=300)
+    published_at: Optional[datetime] = None
+    retrieved_at: Optional[datetime] = None
+    claim: Optional[str] = Field(default=None, max_length=1000)
+
+
 class FailedStep(str, Enum):
     """Identifier of which LLM step failed during concept node generation.
 
@@ -724,6 +748,14 @@ class ConceptNodeResponse(ResponseBase, TimestampMixin, ConceptNodeBase):
     total_quizzes: Optional[int] = Field(
         default=None, description="Total number of quizzes for this node"
     )
+    module_status: ModuleGenerationStatus = Field(
+        default=ModuleGenerationStatus.READY,
+        description="Progressive generation status for this module",
+    )
+    citations: List[PublicNodeCitation] = Field(
+        default_factory=list,
+        description="Validated public source citations for this node",
+    )
 
     def get_visible_quiz(
         self, status: NodeStatus
@@ -778,6 +810,10 @@ class LearningSessionResponse(ResponseBase, TimestampMixin, LearningSessionBase)
         default=None,
         description="Effective depth mode after routing (lite|full)",
     )
+    title_finalized: bool = Field(
+        default=True,
+        description="Whether course title is final (false while provisional)",
+    )
 
 
 class LearningSessionSummary(BaseModel):
@@ -806,6 +842,14 @@ class LearningSessionSummary(BaseModel):
     )
     revision_count: int = Field(
         default=0, description="Number of revision sessions", ge=0
+    )
+    generation_stage: Optional[str] = Field(
+        default=None,
+        description="Optional progressive generation stage when a job exists",
+    )
+    grounding_status: Optional[str] = Field(
+        default=None,
+        description="Optional grounding status when a job exists",
     )
 
 

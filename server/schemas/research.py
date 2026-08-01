@@ -196,6 +196,8 @@ class ResearchProviderStatus(BaseModel):
 
 
 class ResearchReport(BaseModel):
+    """Public research report projection (no canonical URL/content hash)."""
+
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     id: str
@@ -226,3 +228,7 @@ class ResearchReport(BaseModel):
         if unknown:
             raise ValueError(f"Unknown research source IDs: {sorted(unknown)}")
         return self
+
+
+# Alias documenting the public API surface (no private brief/canonical fields).
+PublicResearchReport = ResearchReport
