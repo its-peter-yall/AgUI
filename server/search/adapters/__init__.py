@@ -9,7 +9,7 @@ ROLE IN PROJECT:
     Builds injected httpx adapters keyed by SearchProviderId for the
     coordinator without performing network calls at import time.
 KEY COMPONENTS:
-    - build_search_adapters: Factory returning configured adapters
+    - build_search_adapters: Factory returning all four adapters
     - Adapter class re-exports
 DEPENDENCIES:
     - External: httpx
@@ -26,7 +26,9 @@ from typing import Callable, Optional
 
 import httpx
 
+from server.search.adapters.brave import BraveSearchAdapter
 from server.search.adapters.exa import ExaSearchAdapter
+from server.search.adapters.serpapi import SerpApiSearchAdapter
 from server.search.adapters.tavily import TavilySearchAdapter
 from server.search.types import SearchAdapter, SearchProviderId
 
@@ -37,7 +39,7 @@ def build_search_adapters(
     client: httpx.AsyncClient,
     clock: Optional[Clock] = None,
 ) -> dict[SearchProviderId, SearchAdapter]:
-    """Return available adapters keyed by provider ID in registry order.
+    """Return all four adapters keyed by provider ID in registry order.
 
     Args:
         client: Shared AsyncClient (caller owns lifecycle).
@@ -54,11 +56,19 @@ def build_search_adapters(
         SearchProviderId.EXA: ExaSearchAdapter(
             client=client, clock=active_clock
         ),
+        SearchProviderId.BRAVE: BraveSearchAdapter(
+            client=client, clock=active_clock
+        ),
+        SearchProviderId.SERPAPI: SerpApiSearchAdapter(
+            client=client, clock=active_clock
+        ),
     }
 
 
 __all__ = [
+    "BraveSearchAdapter",
     "ExaSearchAdapter",
+    "SerpApiSearchAdapter",
     "TavilySearchAdapter",
     "build_search_adapters",
 ]

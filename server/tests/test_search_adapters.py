@@ -26,7 +26,9 @@ from datetime import datetime, timezone
 
 import httpx
 
+from server.search.adapters.brave import BraveSearchAdapter
 from server.search.adapters.exa import ExaSearchAdapter
+from server.search.adapters.serpapi import SerpApiSearchAdapter
 from server.search.adapters.tavily import TavilySearchAdapter
 from server.search.types import SearchError, SearchErrorClass, SearchQuery
 
@@ -139,6 +141,117 @@ class TavilyExaAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hit.publisher, "Example Author")
         self.assertEqual(hit.snippet, "Focused current evidence.")
         self.assertEqual(hit.content, "Detailed current evidence.")
+
+
+class BraveSerpApiAdapterTests(unittest.IsolatedAsyncioTestCase):
+    """Tests Brave and SerpAPI snippet-only adapters."""
+
+    async def test_brave_uses_subscription_header_and_snippets(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "web": {
+                        "results": [
+                            {
+                                "title": "Brave result",
+                                "url": "https://example.com/brave",
+                                "description": "Primary snippet.",
+                                "extra_snippets": ["Extra snippet."],
+                                "age": "July 31, 2026",
+                            }
+                        ]
+                    }
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            result = await BraveSearchAdapter(
+                client=client,
+                clock=lambda: FIXED_NOW,
+            ).search(
+                SearchQuery(query="current standard", max_results=4),
+                api_key="brave-secret",
+            )
+        self.assertEqual(
+            requests[0].headers["X-Subscription-Token"],
+            "brave-secret",
+        )
+        self.assertEqual(result.results[0].snippet, "Primary snippet.")
+        self.assertEqual(
+            result.results[0].content,
+            "Primary snippet. Extra snippet.",
+        )
+
+    async def test_serpapi_uses_query_key_but_error_never_echoes_it(self) -> None:
+        secret = "serp-secret-value"
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                429,
+                request=request,
+                json={"error": f"rate limit for {secret}"},
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            with self.assertRaises(SearchError) as raised:
+                await SerpApiSearchAdapter(client=client).search(
+                    SearchQuery(query="test"),
+                    api_key=secret,
+                )
+        self.assertEqual(
+            requests[0].url.params["api_key"],
+            secret,
+        )
+        self.assertEqual(
+            raised.exception.error_class,
+            SearchErrorClass.RATE_LIMIT,
+        )
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertNotIn(secret, repr(raised.exception))
+
+    async def test_serpapi_normalizes_organic_results(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "organic_results": [
+                        {
+                            "position": 2,
+                            "title": "SERP result",
+                            "link": "https://example.net/serp",
+                            "snippet": "Current SERP evidence.",
+                        }
+                    ]
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as client:
+            result = await SerpApiSearchAdapter(
+                client=client,
+                clock=lambda: FIXED_NOW,
+            ).search(
+                SearchQuery(query="current API"),
+                api_key="serp-secret",
+            )
+        self.assertEqual(result.results[0].provider_rank, 2)
+        self.assertEqual(
+            result.results[0].content,
+            "Current SERP evidence.",
+        )
 
 
 if __name__ == "__main__":
