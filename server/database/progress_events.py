@@ -282,3 +282,6 @@ class ProgressEventStore:
                 session_id,
             )
         return cursor.rowcount
+
+
+progress_event_store = ProgressEventStore()
