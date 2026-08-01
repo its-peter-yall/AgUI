@@ -70,7 +70,9 @@ class UnsupportedCitationError(RuntimeError):
 
 def _node_id_for_topic(session_id: str, topic_index: int) -> str:
     """Derive the deterministic node ID for a session topic."""
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"a2ui:{session_id}:{topic_index}"))
+    return str(
+        uuid.uuid5(uuid.NAMESPACE_DNS, f"a2ui:{session_id}:{topic_index}")
+    )
 
 
 def _utc_now() -> datetime:
@@ -342,7 +344,12 @@ class GenerationArtifactStore:
                 SET content_markdown = ?, generation_status = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (content_markdown, GENERATING_STATUS, timestamp.isoformat(), node_id),
+                (
+                    content_markdown,
+                    GENERATING_STATUS,
+                    timestamp.isoformat(),
+                    node_id,
+                ),
             )
             row = active_conn.execute(
                 f"SELECT {NODE_DICT_KEYS} FROM concept_nodes WHERE id = ?",
