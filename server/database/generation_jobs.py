@@ -764,7 +764,7 @@ class GenerationJobStore:
                 SET stage = ?, updated_at = ?
                 WHERE session_id = ?
                 """,
-                (stage.value, _utc_now().isoformat(), session_id),
+                (stage.value, _utc_now(None).isoformat(), session_id),
             )
 
     def update_progress(
@@ -781,7 +781,7 @@ class GenerationJobStore:
                 SET cursor_json = ?, updated_at = ?
                 WHERE session_id = ?
                 """,
-                (cursor_json, _utc_now().isoformat(), session_id),
+                (cursor_json, _utc_now(None).isoformat(), session_id),
             )
 
 
