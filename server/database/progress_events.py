@@ -76,6 +76,10 @@ class ProgressEventConflict(RuntimeError):
     """Raised when an idempotent append carries a divergent payload."""
 
 
+class ProgressEventPersistError(RuntimeError):
+    """Raised when SQLite cannot append or load a progress event."""
+
+
 def _utc_now(now: Optional[datetime]) -> datetime:
     return now or datetime.now(timezone.utc)
 
@@ -184,14 +188,14 @@ class ProgressEventStore:
                         session_id,
                     )
                     return _row_to_event(row)
-        except (sqlite3.OperationalError, LookupError):
-            return ProgressEvent(
-                id=1,
-                session_id=session_id,
-                event_type=event_type,
-                payload=payload,
-                created_at=timestamp,
-            )
+        except sqlite3.OperationalError as exc:
+            raise ProgressEventPersistError(
+                f"Failed to append progress event for session {session_id}"
+            ) from exc
+        except LookupError as exc:
+            raise ProgressEventPersistError(
+                f"Failed to load progress event for session {session_id}"
+            ) from exc
 
     def list_after(
         self,

@@ -322,6 +322,7 @@ class LearningManager:
                     ls.user_id,
                     ls.query,
                     ls.course_title,
+                    ls.title_finalized,
                     ls.mode,
                     ls.resolved_mode,
                     ls.last_active_node_id,
@@ -339,11 +340,15 @@ class LearningManager:
             row = cursor.fetchone()
             if not row:
                 return None
+            title_finalized = row["title_finalized"]
+            if title_finalized is None:
+                title_finalized = 1
             return {
                 "id": row["id"],
                 "user_id": row["user_id"],
                 "query": row["query"],
                 "course_title": row["course_title"],
+                "title_finalized": bool(title_finalized),
                 "mode": row["mode"],
                 "resolved_mode": row["resolved_mode"],
                 "last_active_node_id": row["last_active_node_id"],
@@ -1514,6 +1519,7 @@ class LearningManager:
                     cn.title,
                     cn.content_markdown,
                     cn.status,
+                    cn.generation_status,
                     cn.error_message,
                     cn.retry_available,
                     cn.failed_step,
@@ -1537,6 +1543,9 @@ class LearningManager:
                 )
                 key_terms_raw = row["key_terms"]
                 key_terms = json.loads(key_terms_raw) if key_terms_raw else None
+                generation_status = row["generation_status"]
+                if generation_status is None:
+                    generation_status = "READY"
                 nodes.append(
                     {
                         "id": row["id"],
@@ -1545,6 +1554,7 @@ class LearningManager:
                         "title": row["title"],
                         "content_markdown": row["content_markdown"],
                         "status": row["status"],
+                        "generation_status": generation_status,
                         "error_message": row["error_message"],
                         "retry_available": bool(row["retry_available"])
                         if row["retry_available"] is not None
@@ -3029,6 +3039,11 @@ class LearningManager:
             cursor.execute(
                 "ALTER TABLE concept_nodes ADD COLUMN failed_step TEXT"
             )
+        if "generation_status" not in existing_columns:
+            cursor.execute(
+                "ALTER TABLE concept_nodes "
+                "ADD COLUMN generation_status TEXT NOT NULL DEFAULT 'READY'"
+            )
 
     def _ensure_session_progress_columns(self, conn: sqlite3.Connection) -> None:
         """Migrate learning_sessions table to include progress tracking."""
@@ -3063,6 +3078,11 @@ class LearningManager:
             cursor.execute(
                 "ALTER TABLE learning_sessions "
                 "ADD COLUMN resolved_mode TEXT"
+            )
+        if "title_finalized" not in existing_columns:
+            cursor.execute(
+                "ALTER TABLE learning_sessions "
+                "ADD COLUMN title_finalized INTEGER NOT NULL DEFAULT 1"
             )
 
     def _ensure_node_timestamp_columns(self, conn: sqlite3.Connection) -> None:
