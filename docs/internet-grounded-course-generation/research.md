@@ -6,6 +6,7 @@
 ## Commit
 
 - `61ccbdc55c4e9caec47de207594e6ed854061dda` — docs: research internet-grounded course generation
+- `873ccdbfb4b16cbd4b15b7857aff55ae2963d29c` — docs: add research commit hash
 
 ---
 
