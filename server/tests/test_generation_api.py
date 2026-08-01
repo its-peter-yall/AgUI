@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -121,6 +121,88 @@ class GenerationApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 422)
         runtime.start.assert_not_awaited()
+
+
+class ResearchApiTests(unittest.TestCase):
+    """Tests public research report projection."""
+
+    def test_web_off_returns_not_requested_report(self) -> None:
+        app = FastAPI()
+        app.include_router(router)
+        app.state.generation_runtime = SimpleNamespace()
+        with (
+            patch(
+                "server.routers.learning.learning_manager.get_learning_session",
+                return_value={"id": "session-1"},
+            ),
+            patch(
+                "server.routers.learning.generation_job_store.get_by_session",
+                return_value=SimpleNamespace(web_search_requested=False),
+            ),
+        ):
+            with TestClient(app) as client:
+                response = client.get(
+                    "/learning/sessions/session-1/research"
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "NOT_REQUESTED")
+        self.assertEqual(response.json()["sections"], [])
+        self.assertEqual(response.json()["sources"], [])
+
+    def test_report_response_omits_private_and_secret_fields(self) -> None:
+        public_report = {
+            "id": "report-1",
+            "session_id": "session-1",
+            "status": "DEGRADED",
+            "summary": "Partial current research.",
+            "limitations": ["Provider unavailable."],
+            "freshness_note": "Retrieved 2026-08-01.",
+            "sections": [],
+            "sources": [
+                {
+                    "id": "source-1",
+                    "title": "Current docs",
+                    "url": "https://example.com/docs",
+                    "publisher": "Example",
+                    "published_at": None,
+                    "retrieved_at": "2026-08-01T00:00:00+00:00",
+                    "provider_id": "tavily",
+                    "snippet": "Current docs.",
+                    "excerpt": "Current evidence.",
+                    "relevance_score": 0.9,
+                }
+            ],
+            "provider_statuses": [],
+            "warnings": [],
+            "created_at": "2026-08-01T00:00:00+00:00",
+            "updated_at": "2026-08-01T00:00:00+00:00",
+        }
+        app = FastAPI()
+        app.include_router(router)
+        with (
+            patch(
+                "server.routers.learning.learning_manager.get_learning_session",
+                return_value={"id": "session-1"},
+            ),
+            patch(
+                "server.routers.learning.generation_job_store.get_by_session",
+                return_value=SimpleNamespace(web_search_requested=True),
+            ),
+            patch(
+                "server.routers.learning.research_store.get_public_report",
+                return_value=public_report,
+            ),
+        ):
+            with TestClient(app) as client:
+                response = client.get(
+                    "/learning/sessions/session-1/research"
+                )
+        self.assertEqual(response.status_code, 200)
+        rendered = response.text.lower()
+        self.assertNotIn("canonical_url", rendered)
+        self.assertNotIn("content_hash", rendered)
+        self.assertNotIn("brief", rendered)
+        self.assertNotIn("api_key", rendered)
 
 
 if __name__ == "__main__":

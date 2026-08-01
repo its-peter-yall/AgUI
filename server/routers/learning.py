@@ -612,6 +612,74 @@ def _parse_event_cursor(
 
 
 @router.get(
+    "/sessions/{session_id}/research",
+    response_model=ResearchReport,
+    summary="Get course research report",
+    description=(
+        "Return the public research report and normalized sources for a "
+        "session. Never includes credentials or private briefs."
+    ),
+)
+def get_session_research(session_id: str) -> ResearchReport:
+    """Return public research report projection for a session."""
+    from datetime import datetime, timezone
+
+    from server.schemas.research import ResearchStatus
+
+    session = learning_manager.get_learning_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Learning session not found: {session_id}",
+        )
+
+    job = generation_job_store.get_by_session(session_id)
+    now = datetime.now(timezone.utc)
+    created = session.get("created_at") or now.isoformat()
+    updated = session.get("updated_at") or created
+
+    if job is None or not job.web_search_requested:
+        return ResearchReport.model_validate(
+            {
+                "id": f"not-requested-{session_id}",
+                "session_id": session_id,
+                "status": ResearchStatus.NOT_REQUESTED.value,
+                "summary": None,
+                "limitations": [],
+                "freshness_note": None,
+                "sections": [],
+                "sources": [],
+                "provider_statuses": [],
+                "warnings": [],
+                "created_at": created,
+                "updated_at": updated,
+            }
+        )
+
+    report = research_store.get_public_report(session_id)
+    if report is None:
+        return ResearchReport.model_validate(
+            {
+                "id": f"pending-{session_id}",
+                "session_id": session_id,
+                "status": ResearchStatus.PENDING.value,
+                "summary": None,
+                "limitations": [],
+                "freshness_note": None,
+                "sections": [],
+                "sources": [],
+                "provider_statuses": [],
+                "warnings": [],
+                "created_at": created,
+                "updated_at": updated,
+            }
+        )
+    if isinstance(report, ResearchReport):
+        return report
+    return ResearchReport.model_validate(report)
+
+
+@router.get(
     "/sessions/{session_id}/events",
     summary="Stream generation progress events",
     description=(
