@@ -35,6 +35,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from server.database import generation_job_store, initialize_generation_schema
 from server.database.learning_persistence import learning_manager
 from server.graph.build import CHECKPOINT_DB_PATH, build_graph
 from server.routers import learning_router, llm_router
@@ -55,9 +56,12 @@ async def lifespan(app: FastAPI):
     # Initialize database
     try:
         learning_manager.init_learning_tables()
-        logger.info("Learning tables initialized successfully.")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        initialize_generation_schema()
+        generation_job_store.mark_orphaned_jobs_paused()
+        logger.info("Database initialized successfully.")
+    except Exception:
+        logger.exception("Database initialization failed")
+        raise
 
     CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(
