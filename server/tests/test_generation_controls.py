@@ -87,7 +87,7 @@ class GenerationControlTests(unittest.TestCase):
                 )
         self.assertEqual(response.status_code, 202)
         call = runtime.resume.await_args.kwargs
-        self.assertEqual(call["llm_context"].api_key, "fresh-llm-key")
+        self.assertEqual(call["llm_context"].get_api_key(), "fresh-llm-key")
         self.assertEqual(
             call["search_context"].get_api_key(
                 call["search_context"].provider_ids[0]

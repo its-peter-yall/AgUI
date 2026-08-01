@@ -84,7 +84,7 @@ async def classify_depth(
         role="depth_router",
         response_model=DepthRouteResult,
         messages=[{"role": "user", "content": user_message}],
-        api_key=llm_context.api_key,
+        api_key=llm_context.get_api_key(),
         model_override=llm_context.model,
         attribution_headers=llm_context.get_attribution_headers(),
         system_prompt=DEPTH_ROUTER_SYSTEM_PROMPT,
@@ -116,7 +116,7 @@ async def resolve_depth_mode(
         logger.warning("Unknown depth mode %r; falling back to lite", mode)
         return "lite"
 
-    if llm_context is None or not llm_context.api_key:
+    if llm_context is None or not llm_context.get_api_key():
         logger.warning("Depth router missing llm_context; fallback lite")
         return "lite"
 

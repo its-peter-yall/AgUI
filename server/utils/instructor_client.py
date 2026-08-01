@@ -299,7 +299,14 @@ class InstructorClient:
             return response
 
         except Exception as e:
-            logger.error(f"Structured generation failed for role {role}: {e}")
+            from server.utils.safe_logging import log_external_failure
+
+            log_external_failure(
+                logger,
+                event=f"structured_generation_failed role={role}",
+                session_id="n/a",
+                error=e,
+            )
             raise
 
     def get_model_config(self, role: str) -> dict[str, Any]:

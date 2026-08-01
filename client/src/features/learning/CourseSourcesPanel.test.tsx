@@ -168,7 +168,7 @@ describe('CourseSourcesPanel', () => {
               ...baseReport.sources[0],
               url: 'javascript:void(0)',
               published_at: null,
-              retrieved_at: null,
+              retrieved_at: '2026-08-01T00:00:00Z',
               excerpt: '',
               snippet: 'snippet only',
               publisher: null,

@@ -99,7 +99,7 @@ class GenerationApiTests(unittest.TestCase):
         self.assertNotIn("llm-secret", response.text)
         self.assertNotIn("search-secret", response.text)
         call = runtime.start.await_args.kwargs
-        self.assertEqual(call["llm_context"].api_key, "llm-secret")
+        self.assertEqual(call["llm_context"].get_api_key(), "llm-secret")
         self.assertEqual(
             call["search_context"].get_api_key(call["search_context"].provider_ids[0]),
             "search-secret",

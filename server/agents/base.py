@@ -115,7 +115,16 @@ class BaseAgent(ABC):
             ValueError: If OpenRouter API key is missing
             Exception: On generation failures
         """
-        if not llm_context or not llm_context.api_key:
+        if not llm_context:
+            raise ValueError("AI API key is required in llm_context.")
+        api_key = (
+            llm_context.get_api_key()
+            if hasattr(llm_context, "get_api_key")
+            else str(getattr(llm_context, "api_key", "") or "")
+        )
+        if hasattr(api_key, "get_secret_value"):
+            api_key = api_key.get_secret_value()
+        if not api_key:
             provider_name = llm_context.provider.value.title() if llm_context else "AI"
             raise ValueError(f"{provider_name} API key is required in llm_context.")
 
@@ -124,7 +133,6 @@ class BaseAgent(ABC):
         )
         messages = [{"role": "user", "content": user_message}]
 
-        api_key = llm_context.api_key
         model_override = llm_context.model
         attribution_headers = llm_context.get_attribution_headers()
         reasoning_params = llm_context.get_reasoning_params()

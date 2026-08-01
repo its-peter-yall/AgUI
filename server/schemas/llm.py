@@ -23,10 +23,10 @@ USAGE:
 """
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import HTTPException, Header, status
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class AIProviderEnum(str, Enum):
@@ -38,6 +38,9 @@ class AIProviderEnum(str, Enum):
 class LLMContext(BaseModel):
     """
     Pydantic model representing request-scoped LLM context.
+
+    api_key is SecretStr (excluded from dumps/repr). Prefer get_api_key()
+    for plaintext access at call sites that talk to external SDKs.
     """
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,7 +48,12 @@ class LLMContext(BaseModel):
         default=AIProviderEnum.OPENROUTER,
         description="AI provider to route requests through",
     )
-    api_key: str = Field(..., description="Provider API Key")
+    api_key: SecretStr = Field(
+        ...,
+        description="Provider API Key",
+        repr=False,
+        exclude=True,
+    )
     model: Optional[str] = Field(
         default=None,
         description="Global model slug override to use for all agents",
@@ -75,6 +83,17 @@ class LLMContext(BaseModel):
         default=None,
         description="Model-specific max output token limit from settings",
     )
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _coerce_api_key(cls, value: Union[str, SecretStr]) -> SecretStr:
+        if isinstance(value, SecretStr):
+            return value
+        return SecretStr(str(value))
+
+    def get_api_key(self) -> str:
+        """Return plaintext API key for outbound SDK calls only."""
+        return self.api_key.get_secret_value()
 
     def get_attribution_headers(self) -> dict[str, str]:
         """
@@ -194,7 +213,7 @@ async def get_llm_context(
 
     return LLMContext(
         provider=provider,
-        api_key=api_key,
+        api_key=SecretStr(api_key.strip()),
         model=model,
         http_referer=http_referer,
         app_title=x_openrouter_title,

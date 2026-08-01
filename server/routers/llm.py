@@ -38,7 +38,7 @@ async def _fetch_openrouter_models(llm_context: LLMContext) -> List[ModelRespons
     """Fetch and trim models from OpenRouter."""
     url = f"{settings.OPENROUTER_BASE_URL}/models"
     try:
-        headers = {"Authorization": f"Bearer {llm_context.api_key}"}
+        headers = {"Authorization": f"Bearer {llm_context.get_api_key()}"}
         attribution = llm_context.get_attribution_headers()
         headers.update(attribution)
 
@@ -98,7 +98,7 @@ async def _fetch_generalcompute_models(llm_context: LLMContext) -> List[ModelRes
     """Fetch and trim models from General Compute."""
     url = f"{settings.GENERALCOMPUTE_BASE_URL}/models/list"
     try:
-        headers = {"Authorization": f"Bearer {llm_context.api_key}"}
+        headers = {"Authorization": f"Bearer {llm_context.get_api_key()}"}
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

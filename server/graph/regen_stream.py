@@ -136,7 +136,11 @@ async def stream_regenerate_node_generator(
                 {"role": "user", "content": user_message},
             ]
 
-            api_key = llm_context.api_key
+            api_key = (
+                llm_context.get_api_key()
+                if hasattr(llm_context, "get_api_key")
+                else llm_context.api_key
+            )
             model_override = llm_context.model
             attribution_headers = llm_context.get_attribution_headers()
             reasoning_params = llm_context.get_reasoning_params()
