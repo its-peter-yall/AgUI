@@ -674,24 +674,27 @@ class ResearchStore:
         max_bytes: int = 8000,
     ) -> Optional[str]:
         """Return formatted markdown text for report context up to max_bytes."""
-        report = self.get_report(report_id_or_session_id)
-        if not report:
-            with optional_transaction(self.db_path, None) as conn:
-                row = conn.execute(
-                    "SELECT session_id FROM research_reports WHERE id = ?",
-                    (report_id_or_session_id,),
-                ).fetchone()
-                if row:
-                    report = self.get_report(row["session_id"])
-        if not report:
+        try:
+            report = self.get_report(report_id_or_session_id)
+            if not report:
+                with optional_transaction(self.db_path, None) as conn:
+                    row = conn.execute(
+                        "SELECT session_id FROM research_reports WHERE id = ?",
+                        (report_id_or_session_id,),
+                    ).fetchone()
+                    if row:
+                        report = self.get_report(row["session_id"])
+            if not report:
+                return None
+            parts: list[str] = []
+            if report.summary:
+                parts.append(f"# Research Summary\n{report.summary}")
+            for section in report.sections:
+                parts.append(f"## {section.theme}\n{section.markdown}")
+            full = "\n\n".join(parts)
+            return full[:max_bytes]
+        except (sqlite3.OperationalError, LookupError):
             return None
-        parts: list[str] = []
-        if report.summary:
-            parts.append(f"# Research Summary\n{report.summary}")
-        for section in report.sections:
-            parts.append(f"## {section.theme}\n{section.markdown}")
-        full = "\n\n".join(parts)
-        return full[:max_bytes]
 
     def get_sources_by_ids(
         self,

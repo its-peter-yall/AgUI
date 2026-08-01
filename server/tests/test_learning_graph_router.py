@@ -312,7 +312,7 @@ class StagedCompatibilityRouterTests(unittest.IsolatedAsyncioTestCase):
                 return_value=(completed, SimpleNamespace(id="job-1")),
             ),
             patch(
-                "server.routers.learning.run_generation_job",
+                "server.graph.runner.run_generation_job",
                 new=AsyncMock(),
             ) as run,
             patch(
