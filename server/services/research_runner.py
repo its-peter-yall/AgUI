@@ -845,3 +845,39 @@ class ResearchRunner:
                 ordered.append(item)
                 seen.add(item.theme)
         return ordered
+
+
+async def run_research(
+    *,
+    session_id: str,
+    topic_query: str,
+    llm_context: Any,
+    search_context: Any,
+) -> tuple[str, bool]:
+    """Execute research runner and return (report_id, is_degraded)."""
+    from server.agents.researcher import researcher_agent
+    from server.database.generation_jobs import generation_job_store
+    from server.database.progress_events import progress_event_store
+    from server.database.research_store import research_store
+    from server.search.coordinator import SearchCoordinator
+
+    coordinator = SearchCoordinator(search_context=search_context)
+    runner = ResearchRunner(
+        agent=researcher_agent,
+        research_store=research_store,
+        job_store=generation_job_store,
+        event_store=progress_event_store,
+    )
+    outcome = await runner.run(
+        job_id=f"job-{session_id}",
+        session_id=session_id,
+        query=topic_query,
+        resolved_mode="lite",
+        coordinator=coordinator,
+        llm_context=llm_context,
+    )
+    is_degraded = (
+        outcome.grounding_status == GroundingStatus.DEGRADED
+        or outcome.status == ResearchStatus.DEGRADED
+    )
+    return outcome.report_id, is_degraded
