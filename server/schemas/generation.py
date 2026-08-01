@@ -26,6 +26,7 @@ USAGE:
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal, Optional
 
@@ -180,3 +181,37 @@ class SourceCitation(BaseModel):
 
     source_id: str = Field(min_length=1, max_length=100)
     claim: str = Field(min_length=1, max_length=1000)
+
+
+class GenerationLock(BaseModel):
+    """Fenced worker lock record returned by lock acquisition."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    session_id: str
+    owner: str = Field(min_length=1, max_length=100)
+    version: int = Field(ge=0)
+    expires_at: datetime
+
+
+class GenerationJobRecord(BaseModel):
+    """Persisted generation job shell mirroring the generation_jobs row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    session_id: str
+    thread_id: str
+    stage: GenerationStage
+    resume_stage: Optional[GenerationStage] = None
+    web_search_requested: bool = False
+    grounding_status: GroundingStatus = GroundingStatus.DISABLED
+    cursor: GenerationCursor = Field(default_factory=GenerationCursor)
+    counts: GenerationCounts = Field(default_factory=GenerationCounts)
+    warnings: list[GenerationWarning] = Field(default_factory=list)
+    cancel_requested: bool = False
+    lock_owner: Optional[str] = None
+    lock_version: int = Field(default=0, ge=0)
+    lock_expires_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
