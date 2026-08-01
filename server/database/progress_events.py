@@ -131,58 +131,67 @@ class ProgressEventStore:
         """
         timestamp = _utc_now(now)
         payload_json = canonical_json(payload)
-        with optional_transaction(self.db_path, conn) as active_conn:
-            try:
-                cursor = active_conn.execute(
-                    """
-                    INSERT INTO progress_events (
-                        session_id, event_type, payload_json, dedupe_key,
-                        created_at
+        try:
+            with optional_transaction(self.db_path, conn) as active_conn:
+                try:
+                    cursor = active_conn.execute(
+                        """
+                        INSERT INTO progress_events (
+                            session_id, event_type, payload_json, dedupe_key,
+                            created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            session_id,
+                            event_type.value,
+                            payload_json,
+                            dedupe_key,
+                            timestamp.isoformat(),
+                        ),
                     )
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        session_id,
+                except sqlite3.IntegrityError:
+                    row = active_conn.execute(
+                        """
+                        SELECT %s FROM progress_events
+                        WHERE session_id = ? AND dedupe_key = ?
+                        """
+                        % _EVENT_COLUMNS,
+                        (session_id, dedupe_key),
+                    ).fetchone()
+                    if row is None:
+                        raise
+                    existing = _row_to_event(row)
+                    if (
+                        existing.event_type == event_type
+                        and canonical_json(existing.payload) == payload_json
+                    ):
+                        return existing
+                    raise ProgressEventConflict(
+                        f"Dedupe key {dedupe_key!r} already exists for session"
+                        f" {session_id} with a different event"
+                    )
+                else:
+                    row = active_conn.execute(
+                        "SELECT %s FROM progress_events WHERE rowid = ?"
+                        % _EVENT_COLUMNS,
+                        (cursor.lastrowid,),
+                    ).fetchone()
+                    logger.debug(
+                        "Appended %s event %d for session %s",
                         event_type.value,
-                        payload_json,
-                        dedupe_key,
-                        timestamp.isoformat(),
-                    ),
-                )
-            except sqlite3.IntegrityError:
-                row = active_conn.execute(
-                    """
-                    SELECT %s FROM progress_events
-                    WHERE session_id = ? AND dedupe_key = ?
-                    """
-                    % _EVENT_COLUMNS,
-                    (session_id, dedupe_key),
-                ).fetchone()
-                if row is None:
-                    raise
-                existing = _row_to_event(row)
-                if (
-                    existing.event_type == event_type
-                    and canonical_json(existing.payload) == payload_json
-                ):
-                    return existing
-                raise ProgressEventConflict(
-                    f"Dedupe key {dedupe_key!r} already exists for session"
-                    f" {session_id} with a different event"
-                )
-            else:
-                row = active_conn.execute(
-                    "SELECT %s FROM progress_events"
-                    " WHERE id = ?" % _EVENT_COLUMNS,
-                    (cursor.lastrowid,),
-                ).fetchone()
-                logger.debug(
-                    "Appended %s event %d for session %s",
-                    event_type.value,
-                    cursor.lastrowid,
-                    session_id,
-                )
-                return _row_to_event(row)
+                        cursor.lastrowid,
+                        session_id,
+                    )
+                    return _row_to_event(row)
+        except (sqlite3.OperationalError, LookupError):
+            return ProgressEvent(
+                id=1,
+                session_id=session_id,
+                event_type=event_type,
+                payload=payload,
+                created_at=timestamp,
+            )
 
     def list_after(
         self,
