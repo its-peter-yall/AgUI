@@ -22,7 +22,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from server.agents.planner import PlannerAgent
+from server.agents.planner import PlannerAgent, ResumablePlannerError
 from server.schemas.generation import (
     GenerationBrief,
     GenerationBriefBatch,

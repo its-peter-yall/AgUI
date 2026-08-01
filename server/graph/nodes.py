@@ -64,13 +64,11 @@ from server.graph.state import (
 from server.schemas.generation import (
     PREVIEW_BATCH_SIZE,
     STANDARD_BATCH_SIZE,
-    FailedStep,
     GenerationBrief,
     GenerationStage,
     GroundingStatus,
 )
-from server.schemas.progress import ProgressEventType
-from server.schemas.learning import CourseOutline, NodeStatus, QuizSet, TopicNode
+from server.schemas.learning import CourseOutline, FailedStep, NodeStatus, QuizSet, TopicNode
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 from server.services.research_runner import run_research
