@@ -5,32 +5,21 @@
  * ============================================================================
  *
  * PURPOSE:
- *    Form component for entering a learning topic. Triggers course generation
- *    on submit, shows loading progress during the scatter-gather process, and
- *    navigates to the generated learning path on success.
+ *    Form for entering a learning topic with optional per-course web search.
  *
  * ROLE IN PROJECT:
- *    Entry point of the learning feature rendered on LearningHome. Bridges
- *    user intent to the generateCourse API and routes to the resulting
- *    LearningPathContainer session.
+ *    Entry point on LearningHome. Calls generateCourse (202), seeds React Query
+ *    cache, and navigates immediately to the progressive session shell.
  *
  * KEY COMPONENTS:
- *    - TopicInput: Main form with text input and submit button
- *    - Depth Mode Picker: Custom Auto/Lite/Full dropdown
- *    - Suggestion Chips: Clickable topic suggestions for quick starts
- *    - Loading State: Progress message while generating course
- *    - Error Display: Error message if generation fails
+ *    - TopicInput: Form with depth picker, web-search toggle, submit
  *
  * DEPENDENCIES:
  *    - External: react-router-dom, @tanstack/react-query, lucide-react
- *    - Internal: @/lib/utils (cn), @/lib/learningApi (generateCourse)
+ *    - Internal: learningApi, providerSettings, utils
  *
  * USAGE:
- *    ```tsx
  *    <TopicInput />
- *
- *    <TopicInput placeholder="What do you want to master?" userId="user-123" />
- *    ```
  * ============================================================================
  */
 
@@ -38,13 +27,17 @@ import { useState, useId, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Globe2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { generateCourse } from '@/lib/learningApi';
-import { getProviderSettings } from '@/lib/providerSettings';
+import {
+  getProviderSettings,
+  hasWebSearchCapability,
+} from '@/lib/providerSettings';
 import type {
   GenerateCourseRequest,
   LearningDepthMode,
+  LearningSessionWithNodes,
 } from '@/types/learning';
 
 interface TopicInputProps {
@@ -80,11 +73,12 @@ export function TopicInput({
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<LearningDepthMode>('auto');
   const [modeOpen, setModeOpen] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const inputId = useId();
   const modeListboxId = useId();
   const modePickerRef = useRef<HTMLDivElement>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const canUseWebSearch = hasWebSearchCapability();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -106,28 +100,44 @@ export function TopicInput({
   }, [modeOpen]);
 
   const generateMutation = useMutation({
-    mutationFn: (data: GenerateCourseRequest) => {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      return generateCourse(data, controller.signal);
-    },
-    onSuccess: (session) => {
+    mutationFn: (data: GenerateCourseRequest) =>
+      generateCourse(data, { webSearchEnabled }),
+    onSuccess: (accepted) => {
+      const shell = accepted.session;
+      const session: LearningSessionWithNodes = {
+        id: String(shell.id),
+        user_id:
+          typeof shell.user_id === 'string' || shell.user_id === null
+            ? (shell.user_id as string | null)
+            : null,
+        query: String(shell.query ?? ''),
+        course_title: String(shell.course_title ?? shell.query ?? ''),
+        total_nodes:
+          typeof shell.total_nodes === 'number' ? shell.total_nodes : 0,
+        completed_nodes:
+          typeof shell.completed_nodes === 'number'
+            ? shell.completed_nodes
+            : 0,
+        last_active_node_id: null,
+        title_finalized:
+          typeof shell.title_finalized === 'boolean'
+            ? shell.title_finalized
+            : false,
+        created_at:
+          typeof shell.created_at === 'string'
+            ? shell.created_at
+            : new Date().toISOString(),
+        updated_at: null,
+        nodes: Array.isArray(shell.nodes)
+          ? (shell.nodes as LearningSessionWithNodes['nodes'])
+          : [],
+        generation: accepted.generation,
+      };
+      queryClient.setQueryData(['learningSession', session.id], session);
       queryClient.invalidateQueries({ queryKey: ['courses'] });
-      // Navigate on success - best practice from TanStack Query
       navigate(`/learn/${session.id}`);
     },
-    onSettled: () => {
-      abortRef.current = null;
-    },
   });
-
-  const handleStop = () => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    generateMutation.reset();
-  };
 
   const settings = getProviderSettings();
   const hasApiKey = Boolean(settings.providers[settings.activeProvider].apiKey);
@@ -160,7 +170,8 @@ export function TopicInput({
         </label>
         <input
           id={inputId}
-          type="text"
+          type="search"
+          role="searchbox"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoFocus={autoFocus}
@@ -169,16 +180,41 @@ export function TopicInput({
           aria-describedby={error ? `${inputId}-error` : undefined}
           aria-invalid={error ? 'true' : undefined}
           className={cn(
-            'w-full px-4 py-3 pr-48 text-lg rounded-lg border',
+            'w-full px-4 py-3 pr-56 text-lg rounded-lg border',
             'bg-background text-foreground',
             'placeholder:text-muted-foreground',
             'focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent',
             'disabled:opacity-50 disabled:cursor-not-allowed',
             'transition-colors duration-200',
-            error && 'border-destructive focus:ring-destructive'
+            error && 'border-destructive focus:ring-destructive',
           )}
         />
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 sm:gap-2">
+          {canUseWebSearch && (
+            <button
+              type="button"
+              aria-label="Use web search for this course"
+              aria-pressed={webSearchEnabled}
+              title={
+                webSearchEnabled
+                  ? 'Web search on for this course'
+                  : 'Web search off for this course'
+              }
+              onClick={() => setWebSearchEnabled((v) => !v)}
+              disabled={isLoading || !hasApiKey}
+              className={cn(
+                'inline-flex items-center justify-center h-8 w-8 rounded-md shrink-0',
+                'border transition-colors duration-200',
+                'focus:outline-none focus:ring-2 focus:ring-primary',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+                webSearchEnabled
+                  ? 'bg-[#ffb74d]/15 border-[#ffb74d] text-[#ffb74d]'
+                  : 'bg-muted border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Globe2 className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
           <div ref={modePickerRef} className="relative">
             <button
               type="button"
@@ -199,14 +235,14 @@ export function TopicInput({
                 'focus:outline-none focus:ring-2 focus:ring-primary',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 'transition-colors duration-200',
-                modeOpen && 'ring-2 ring-primary border-transparent'
+                modeOpen && 'ring-2 ring-primary border-transparent',
               )}
             >
               <span className="leading-none">{selectedModeLabel}</span>
               <ChevronDown
                 className={cn(
                   'h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200',
-                  modeOpen && 'rotate-180'
+                  modeOpen && 'rotate-180',
                 )}
                 aria-hidden="true"
               />
@@ -220,7 +256,7 @@ export function TopicInput({
                 className={cn(
                   'absolute right-0 top-full z-50 mt-1 min-w-full',
                   'rounded-md border border-border bg-popover text-popover-foreground',
-                  'shadow-lg overflow-hidden'
+                  'shadow-lg overflow-hidden',
                 )}
               >
                 {DEPTH_MODE_OPTIONS.map((option) => {
@@ -239,7 +275,7 @@ export function TopicInput({
                         'w-full text-left px-3 py-2 text-sm transition-colors',
                         'hover:bg-muted focus:outline-none focus:bg-muted',
                         isSelected &&
-                          'bg-primary/10 text-primary font-semibold'
+                          'bg-primary/10 text-primary font-semibold',
                       )}
                     >
                       {option.label}
@@ -250,60 +286,49 @@ export function TopicInput({
             )}
           </div>
           <button
-            type={isLoading ? 'button' : 'submit'}
-            onClick={isLoading ? handleStop : undefined}
-            disabled={(!query.trim() && !isLoading) || !hasApiKey}
-            aria-label={isLoading ? 'Stop generating' : 'Start learning'}
+            type="submit"
+            disabled={!query.trim() || isLoading || !hasApiKey}
+            aria-label={isLoading ? 'Starting...' : 'Start learning'}
             className={cn(
               'px-4 py-1.5 rounded-md text-sm font-medium',
-              isLoading
-                ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90 focus:ring-destructive'
-                : 'bg-primary text-primary-foreground hover:bg-primary/90 focus:ring-primary',
+              'bg-primary text-primary-foreground hover:bg-primary/90 focus:ring-primary',
               'transition-colors duration-200',
               'disabled:opacity-50 disabled:cursor-not-allowed',
-              'focus:outline-none focus:ring-2 focus:ring-offset-2'
+              'focus:outline-none focus:ring-2 focus:ring-offset-2',
             )}
           >
-            {isLoading ? 'Stop' : 'Learn'}
+            {isLoading ? 'Starting...' : 'Learn'}
           </button>
         </div>
       </form>
 
-      {/* Loading message with progress hint */}
       {isLoading && (
         <div className="mt-3 text-center" role="status" aria-live="polite">
           <p className="text-sm text-muted-foreground animate-pulse">
-            Creating your personalized learning path...
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Generating explanations and quizzes for each topic
+            Starting your course...
           </p>
         </div>
       )}
 
-      {/* Error message with accessible announcement */}
       {error && (
         <p
           id={`${inputId}-error`}
           className="mt-3 text-sm text-destructive text-center"
           role="alert"
         >
-          Failed to generate course. Please try again.
+          Failed to start course. Please try again.
         </p>
       )}
 
-      {/* No API key warning */}
       {!hasApiKey && (
         <p
           className="mt-3 text-sm text-amber-600 dark:text-amber-400 text-center"
           role="alert"
         >
-          Enter your API key in the settings page to start
-          learning.
+          Enter your API key in the settings page to start learning.
         </p>
       )}
 
-      {/* Suggestions */}
       <div className="mt-4 flex flex-wrap gap-2 justify-center">
         <span className="text-sm text-muted-foreground">Try:</span>
         {TOPIC_SUGGESTIONS.map((suggestion) => (
@@ -317,7 +342,7 @@ export function TopicInput({
               'bg-muted hover:bg-muted/80 text-muted-foreground',
               'transition-colors duration-200',
               'disabled:opacity-50 disabled:cursor-not-allowed',
-              'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2'
+              'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
             )}
           >
             {suggestion}
