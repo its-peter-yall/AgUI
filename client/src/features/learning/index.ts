@@ -53,6 +53,9 @@ export type { CourseCardProps } from './CourseCard';
 export { CourseFilter } from './CourseFilter';
 export type { CourseFilterProps, FilterStatus, SortField } from './CourseFilter';
 export { CourseCardSkeleton } from './CourseCardSkeleton';
+export { GenerationStatusPanel } from './GenerationStatusPanel';
+export { CourseSourcesPanel } from './CourseSourcesPanel';
+export { SourceCitations } from './SourceCitations';
 export {
   ErrorState,
   NotFoundState,
@@ -67,6 +70,8 @@ export { useNodeState, isValidTransition, getNextStatus } from './useNodeState';
 export { useLearningMutations } from './useLearningMutations';
 export { useErrorToast, ToastContainer } from './useErrorToast';
 export { useCourseList } from './useCourseList';
+export { useSessionEvents } from './useSessionEvents';
+export { applyGenerationEvent, isTerminalGenerationStage } from './generationEvents';
 export type { UseCourseListOptions } from './useCourseList';
 export type { UseLearningMutationsProps } from './useLearningMutations';
 export type { NodeActions, NodeStateResult } from './useNodeState';

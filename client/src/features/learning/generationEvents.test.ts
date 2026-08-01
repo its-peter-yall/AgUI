@@ -30,11 +30,36 @@ import type { LearningSessionWithNodes } from '@/types/learning';
 
 const session = {
   id: 'session-1',
+  user_id: null,
+  query: 'q',
+  course_title: 'q',
+  total_nodes: 0,
+  completed_nodes: 0,
+  last_active_node_id: null,
+  created_at: '2026-08-01T00:00:00Z',
+  updated_at: null,
   nodes: [],
   generation: {
+    id: 'job-1',
+    session_id: 'session-1',
     stage: 'RESEARCHING',
+    web_search_requested: true,
+    grounding_status: 'PENDING',
     last_event_id: 4,
-    counts: { research_sections: 0, sources: 0 },
+    counts: {
+      topics_total: 0,
+      briefs_ready: 0,
+      topics_ready: 0,
+      topics_failed: 0,
+      research_sections: 0,
+      sources: 0,
+    },
+    warnings: [],
+    cancel_requested: false,
+    can_cancel: true,
+    can_resume: false,
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
   },
 } as LearningSessionWithNodes;
 

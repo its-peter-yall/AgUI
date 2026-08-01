@@ -62,6 +62,46 @@ function formatDate(isoString: string): string {
 	}).format(new Date(isoString));
 }
 
+function generationBadge(
+	generation: CourseCardProps["session"]["generation"],
+): { label: string; className: string } | null {
+	if (!generation) return null;
+	switch (generation.stage) {
+		case "COMPLETE":
+			return null;
+		case "COMPLETE_DEGRADED":
+			return {
+				label: "Complete with research warning",
+				className:
+					"bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30",
+			};
+		case "CANCELLED":
+			return {
+				label: "Cancelled",
+				className:
+					"bg-zinc-500/10 text-zinc-500 border border-zinc-500/30",
+			};
+		case "PAUSED":
+			return {
+				label: "Paused",
+				className:
+					"bg-blue-500/10 text-blue-500 border border-blue-500/30",
+			};
+		case "FAILED":
+			return {
+				label: "Failed",
+				className:
+					"bg-red-500/10 text-red-500 border border-red-500/30",
+			};
+		default:
+			return {
+				label: "Generating",
+				className:
+					"bg-[#ffb74d]/15 text-[#ffb74d] border border-[#ffb74d]/40",
+			};
+	}
+}
+
 export function CourseCard({
 	session,
 	onResume,
@@ -71,6 +111,7 @@ export function CourseCard({
 }: CourseCardProps) {
 	const isCompleted = session.status === "completed";
 	const progressPercent = Math.floor(session.progress_percent);
+	const genBadge = generationBadge(session.generation);
 	const [showConfirm, setShowConfirm] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const cancelBtnRef = useRef<HTMLButtonElement>(null);
@@ -236,16 +277,39 @@ export function CourseCard({
 				<h3 className="text-base font-semibold text-foreground line-clamp-2 flex-1">
 					{session.course_title}
 				</h3>
-				{isCompleted && (
-					<span
-						className="flex items-center gap-1 shrink-0 text-green-400"
-						data-testid="completed-badge"
-						aria-label="Course Completed"
-					>
-						<CheckCircle className="h-4 w-4" aria-hidden="true" />
-						<span className="text-xs font-medium">Completed</span>
-					</span>
-				)}
+				<div className="flex flex-col items-end gap-1 shrink-0">
+					{genBadge && (
+						<span
+							className={cn(
+								"text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full",
+								genBadge.className,
+							)}
+							data-testid="generation-badge"
+						>
+							{genBadge.label}
+						</span>
+					)}
+					{isCompleted && !genBadge && (
+						<span
+							className="flex items-center gap-1 text-green-400"
+							data-testid="completed-badge"
+							aria-label="Course Completed"
+						>
+							<CheckCircle className="h-4 w-4" aria-hidden="true" />
+							<span className="text-xs font-medium">Completed</span>
+						</span>
+					)}
+					{isCompleted && genBadge?.label.startsWith("Complete") && (
+						<span
+							className="flex items-center gap-1 text-green-400"
+							data-testid="completed-badge"
+							aria-label="Course Completed"
+						>
+							<CheckCircle className="h-4 w-4" aria-hidden="true" />
+							<span className="text-xs font-medium">Completed</span>
+						</span>
+					)}
+				</div>
 			</div>
 
 			{/* Query text */}
