@@ -40,13 +40,15 @@ import { LearningPathContainer } from "./LearningPathContainer";
 import { SettingsButton } from "@/components/SettingsButton";
 import { getLearningSession } from "@/lib/learningApi";
 import { cn } from "@/lib/utils";
-import { useChatStreaming } from "./useChatStreaming";
+import {
+	isTerminalGenerationStage,
+	useSessionEvents,
+} from "./useSessionEvents";
 
 export function LearningPage() {
 	const { sessionId } = useParams<{ sessionId: string }>();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const { isStreaming } = useChatStreaming();
 	const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(
 		null,
 	);
@@ -59,7 +61,7 @@ export function LearningPage() {
 		typeof window !== "undefined" &&
 		window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-	// Fetch session for progress bar
+	// Fetch session for progress bar — 2s repair poll while generation nonterminal
 	const {
 		data: session,
 		refetch,
@@ -69,10 +71,20 @@ export function LearningPage() {
 		queryKey: ["learningSession", sessionId],
 		queryFn: () => getLearningSession(sessionId!),
 		enabled: !!sessionId,
-		staleTime: 60_000,
-		// Pause polling during chat streaming to reduce server load
-		refetchInterval: isStreaming ? false : 2000,
+		staleTime: 0,
+		refetchInterval: (query) => {
+			const stage = query.state.data?.generation?.stage;
+			if (!stage || isTerminalGenerationStage(stage)) {
+				return false;
+			}
+			return 2000;
+		},
 	});
+
+	const generationActive =
+		!!session?.generation &&
+		!isTerminalGenerationStage(session.generation.stage);
+	useSessionEvents(sessionId, generationActive);
 
 	// Invalidate course list on unmount so dashboard is fresh
 	useEffect(() => {
