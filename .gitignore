@@ -74,9 +74,6 @@ coverage/
 .coverage
 .nyc_output/
 htmlcov/
-*.test.ts
-*.test.tsx
-vitest.setup.ts
 
 # Dev tooling
 pyrightconfig.json
