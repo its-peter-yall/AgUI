@@ -33,8 +33,8 @@ from server.schemas.generation import (
     GENERATION_LOCK_HEARTBEAT_SECONDS,
     GENERATION_MAX_CONCURRENCY,
     GenerationStage,
-    ProgressEventType,
 )
+from server.schemas.progress import ProgressEventType
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 

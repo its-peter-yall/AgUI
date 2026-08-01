@@ -963,17 +963,16 @@ Expected: staged and rewritten graph tests PASS.
 
 - [ ] **Step 5: Commit staged graph**
 
-```powershell
-git add server/graph/nodes.py server/graph/build.py server/tests/test_staged_graph.py server/tests/test_graph.py
-git commit -m "feat(graph): add durable three-ten course workflow"
-```
 
-### Task 4.5: Add Locked Runner, Cooperative Cancel, Pause, and Resume
+#- [x] Task 4.1: Split Planner into TOC and Exact Brief-Batch Turns
+- [x] Task 4.2: Ground Generator and Quizzer in Persisted Briefs
+- [x] Task 4.3: Replace Graph State with Secret-Free Keyed Reducers
+- [x] Task 4.4: Build Optional-Research 3/10 Graph with Fan-In Barriers
+- [x] Task 4.5: Add Locked Runner, Cooperative Cancel, Pause, and Resume
+- [x] Task 4.6: Remove Old Background Remainder and Disconnect Deletione
 
 **Files:**
 - Create: `server/graph/runner.py`
-- Create: `server/tests/test_generation_recovery.py`
-
 - [ ] **Step 1: Write failing recovery tests**
 
 Create `server/tests/test_generation_recovery.py`:

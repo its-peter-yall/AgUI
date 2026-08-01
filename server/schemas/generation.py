@@ -215,3 +215,9 @@ class GenerationJobRecord(BaseModel):
     lock_expires_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+PREVIEW_BATCH_SIZE = 3
+STANDARD_BATCH_SIZE = 10
+GENERATION_LOCK_HEARTBEAT_SECONDS = 15
+GENERATION_MAX_CONCURRENCY = 3

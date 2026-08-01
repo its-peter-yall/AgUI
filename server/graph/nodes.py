@@ -68,8 +68,8 @@ from server.schemas.generation import (
     GenerationBrief,
     GenerationStage,
     GroundingStatus,
-    ProgressEventType,
 )
+from server.schemas.progress import ProgressEventType
 from server.schemas.learning import CourseOutline, NodeStatus, QuizSet, TopicNode
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext

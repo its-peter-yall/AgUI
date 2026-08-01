@@ -154,23 +154,29 @@ class PlannerBriefTests(unittest.IsolatedAsyncioTestCase):
     async def test_web_off_briefs_reject_research_fields(self) -> None:
         agent = PlannerAgent()
         outline = CourseOutline(course_title="Course", topics=_topics(3))
-        invalid = _brief(0).model_copy(
-            update={
-                "research_report_id": "report-1",
-                "grounding_status": GroundingStatus.DISABLED,
-            }
+        invalid = GenerationBrief.model_construct(
+            topic_index=0,
+            topic_title="Topic 0",
+            learning_objectives=["Obj 1"],
+            key_concepts=["Concept 1"],
+            quiz_learning_targets=["Target 1"],
+            common_misconceptions=["Misconception 1"],
+            expected_learner_evidence=["Evidence 1"],
+            grounding_status=GroundingStatus.DISABLED,
+            research_report_id="report-1",
+            source_excerpts=None,
         )
         with patch.object(
             agent,
             "generate",
             new=AsyncMock(
-                return_value=GenerationBriefBatch(
+                return_value=GenerationBriefBatch.model_construct(
                     start_index=0,
                     briefs=[invalid],
                 )
             ),
         ):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ResumablePlannerError):
                 await agent.plan_briefs(
                     outline=outline,
                     start_index=0,
