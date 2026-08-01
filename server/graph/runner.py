@@ -150,6 +150,7 @@ async def run_generation_job(
                 session_id=session_id,
                 event_type=ProgressEventType.GENERATION_CANCELLED,
                 payload=GenerationCancelledPayload(stage=GenerationStage.CANCELLED),
+                dedupe_key="cancelled_event",
             )
         except Exception:
             pass
@@ -165,6 +166,7 @@ async def run_generation_job(
                     stage=GenerationStage.PAUSED,
                     warning=GenerationWarning(code="resumable_error", message=str(exc)),
                 ),
+                dedupe_key=f"paused_{abs(hash(str(exc)))}",
             )
         except Exception:
             pass
@@ -180,6 +182,7 @@ async def run_generation_job(
                     previous_stage=GenerationStage.INITIALIZING,
                     stage=GenerationStage.FAILED,
                 ),
+                dedupe_key="failed_event",
             )
         except Exception:
             pass

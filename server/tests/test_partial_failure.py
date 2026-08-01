@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import AsyncMock, patch
 
-from server.database.learning_persistence import LearningManager
+from server.database.learning_persistence import LearningManager, learning_manager
 from server.graph.nodes import quizzer_node
 from server.schemas.learning import (
     CourseOutline,

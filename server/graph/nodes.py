@@ -183,6 +183,7 @@ async def initialize_generation_node(
             previous_stage=GenerationStage.INITIALIZING,
             stage=next_stage,
         ),
+        dedupe_key=f"stage_init_{next_stage.value}",
     )
 
     return {
@@ -235,6 +236,7 @@ async def researcher_node(
             previous_stage=GenerationStage.RESEARCHING,
             stage=GenerationStage.OUTLINING,
         ),
+        dedupe_key="stage_research_outlining",
     )
 
     return {
@@ -277,6 +279,7 @@ async def outline_planner_node(
             previous_stage=GenerationStage.OUTLINING,
             stage=GenerationStage.PLANNING_PREVIEW,
         ),
+        dedupe_key="stage_outline_preview",
     )
 
     return {
@@ -308,6 +311,7 @@ async def plan_brief_batch_node(
             previous_stage=GenerationStage.OUTLINING if batch.start == 0 else GenerationStage.PLANNING_BATCH,
             stage=stage_plan,
         ),
+        dedupe_key=f"stage_plan_batch_{batch.start}",
     )
 
     outline = generation_artifact_store.get_outline(session_id)
@@ -353,6 +357,7 @@ async def plan_brief_batch_node(
             previous_stage=stage_plan,
             stage=stage_gen,
         ),
+        dedupe_key=f"stage_gen_batch_{batch.start}",
     )
 
     return {
@@ -623,6 +628,7 @@ async def finalize_generation_node(
             previous_stage=GenerationStage.GENERATING_BATCH,
             stage=final_stage,
         ),
+        dedupe_key=f"stage_finalize_{final_stage.value}",
     )
 
     logger.info("Generation job finalized for session %s with stage %s", session_id, final_stage.value)
