@@ -1,7 +1,7 @@
 # Code Review: Internet-Grounded Course Generation
 **Reviewer mood:** hostile
 **Commit range:** 4251b40..458f183
-**Review commit:** PENDING
+**Review commit:** 0f82b6012e6459d892d267e11635040c3b01ff63
 
 ## Executive verdict
 NO_SHIP
