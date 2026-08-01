@@ -59,10 +59,9 @@ class GenerationRecoverySecurityAcceptanceTests(
             )
         )
 
-        self.assertEqual(result.cancelled_stage, "CANCELLED")
-        # Startup reconciliation pauses orphaned active jobs; retained CANCELLED
-        # stays resumable without forced PAUSED conversion.
-        self.assertIn(result.stage_after_restart, {"PAUSED", "CANCELLED"})
+        # C4: abrupt restart without user cancel → PAUSED (not CANCELLED).
+        self.assertNotEqual(result.cancelled_stage, "CANCELLED")
+        self.assertEqual(result.stage_after_restart, "PAUSED")
         self.assertIn(result.terminal_stage, {"COMPLETE", "COMPLETE_DEGRADED"})
         self.assertEqual(result.thread_ids, [result.thread_ids[0]] * 3)
         self.assertEqual(result.node_ids_before, result.node_ids_after[: len(result.node_ids_before)])

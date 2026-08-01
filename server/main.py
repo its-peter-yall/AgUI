@@ -58,7 +58,9 @@ async def lifespan(app: FastAPI):
     try:
         learning_manager.init_learning_tables()
         initialize_generation_schema()
-        generation_job_store.mark_orphaned_jobs_paused()
+        generation_job_store.mark_orphaned_jobs_paused(
+            pause_all_nonterminal=True
+        )
         logger.info("Database initialized successfully.")
     except Exception:
         logger.exception("Database initialization failed")

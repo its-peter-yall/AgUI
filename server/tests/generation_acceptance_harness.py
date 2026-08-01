@@ -403,7 +403,10 @@ class GenerationAcceptanceHarness:
             topic_query: str,
             llm_context: Any,
             search_context: Any,
+            **_kwargs: Any,
         ) -> tuple[str, bool]:
+            # C7: Prefer production composition when available; fallback remains
+            # for exhaust/degraded scenarios only. kwargs absorb resolved_mode/lock.
             del topic_query, llm_context
             self._research_calls += 1
             if scenario.exhaust_providers:
@@ -796,12 +799,8 @@ class GenerationAcceptanceHarness:
             assert self._planner_entered is not None
             await asyncio.wait_for(self._planner_entered.wait(), timeout=30)
 
-            await self.runtime.cancel(session_id)
-            # Unblock planner so cancel can be observed at next boundary.
-            assert self._planner_gate is not None
-            self._planner_gate.set()
-            await self._await_runtime()
-
+            # C4: Abrupt process loss — do NOT call user cancel.
+            # Snapshot partial progress, then shutdown → PAUSED.
             job = self.jobs.get_by_session(session_id)
             assert job is not None
             cancelled_stage = job.stage.value
@@ -820,13 +819,21 @@ class GenerationAcceptanceHarness:
                     )[: scenario.cancel_after_ready]
                 ]
 
-            # Simulate process restart: shutdown runtime, pause orphans, new runtime.
+            # Unblock planner so in-flight work can observe shutdown.
+            assert self._planner_gate is not None
+            self._planner_gate.set()
+
+            # Simulate process restart: shutdown runtime pauses nonterminal jobs.
             await self.runtime.shutdown()
             # Original contexts must not be retained.
             del llm
             del search
 
-            paused = self.jobs.mark_orphaned_jobs_paused()
+            # Startup reconciliation for prior-process jobs (incl. live locks).
+            try:
+                self.jobs.mark_orphaned_jobs_paused(pause_all_nonterminal=True)
+            except TypeError:
+                self.jobs.mark_orphaned_jobs_paused()
             job = self.jobs.get_by_session(session_id)
             assert job is not None
             stage_after_restart = job.stage.value

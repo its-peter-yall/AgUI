@@ -101,15 +101,27 @@ class GenerationRuntime:
         llm_context: LLMContext,
         search_context: SearchContext,
         resume: bool,
+        shutdown_pause: bool = False,
     ) -> None:
         async def _run() -> None:
-            await self.runner(
-                app_state=self.app_state,
-                session_id=session_id,
-                llm_context=llm_context,
-                search_context=search_context,
-                resume=resume,
-            )
+            try:
+                await self.runner(
+                    app_state=self.app_state,
+                    session_id=session_id,
+                    llm_context=llm_context,
+                    search_context=search_context,
+                    resume=resume,
+                    shutdown_pause=shutdown_pause,
+                )
+            except TypeError:
+                # Older runner doubles may omit shutdown_pause.
+                await self.runner(
+                    app_state=self.app_state,
+                    session_id=session_id,
+                    llm_context=llm_context,
+                    search_context=search_context,
+                    resume=resume,
+                )
 
         task = asyncio.create_task(_run(), name=f"gen-{session_id}")
         self._track_task(session_id, task)
@@ -283,12 +295,23 @@ class GenerationRuntime:
                 pass
 
     async def shutdown(self) -> None:
-        """Pause unfinished jobs and cancel only this process's tasks."""
+        """Pause unfinished jobs and cancel only this process's tasks.
+
+        Marks nonterminal jobs PAUSED before cancelling local tasks so
+        task cancellation is not recorded as user CANCELLED.
+        """
         try:
-            self.job_store.mark_orphaned_jobs_paused()
+            try:
+                self.job_store.mark_orphaned_jobs_paused(
+                    pause_all_nonterminal=True
+                )
+            except TypeError:
+                self.job_store.mark_orphaned_jobs_paused()
         except Exception:
             logger.exception("Failed to mark orphaned jobs paused on shutdown")
 
+        # Flag in-flight runners that task cancel means process pause.
+        self._shutdown_in_progress = True
         tasks = list(self.active_tasks)
         for task in tasks:
             task.cancel()
