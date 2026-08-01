@@ -313,21 +313,70 @@ class GraphNodeTests(unittest.IsolatedAsyncioTestCase):
         mock_logger.warning.assert_called_once()
 
 
-class StateSchemaTests(unittest.TestCase):
-    def test_generator_result_has_required_fields(self) -> None:
-        result: GeneratorResult = {
-            "topic_data": {"title": "Test"},
-            "content_markdown": "content",
-            "generation_ms": 100.0,
-            "error_message": None,
-            "sequence_index": 0,
-            "session_id": "session-1",
-        }
-        self.assertEqual(result["sequence_index"], 0)
-        self.assertIsNone(result["error_message"])
+class StagedStateTests(unittest.TestCase):
+    """Tests staged graph state, reducers, and batch sizing."""
 
-    def test_course_state_has_generator_results(self) -> None:
-        self.assertIn("generator_results", CourseState.__annotations__)
+    def test_batches_are_three_then_ten_then_remainder(self) -> None:
+        from server.graph.nodes import select_topic_batch
+
+        cursor = 0
+        batches: list[tuple[int, int]] = []
+        while cursor < 30:
+            batch = select_topic_batch(cursor, 30)
+            batches.append((batch.start, batch.size))
+            cursor = batch.start + batch.size
+        self.assertEqual(
+            batches,
+            [(0, 3), (3, 10), (13, 10), (23, 7)],
+        )
+
+    def test_keyed_reducer_replaces_resumed_topic_result(self) -> None:
+        from server.graph.state import merge_generator_results
+
+        current = [
+            {
+                "batch_start": 0,
+                "sequence_index": 1,
+                "content_ready": False,
+                "error_message": "first failure",
+            }
+        ]
+        update = [
+            {
+                "batch_start": 0,
+                "sequence_index": 1,
+                "content_ready": True,
+                "error_message": None,
+            }
+        ]
+        merged = merge_generator_results(current, update)
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0]["content_ready"])
+
+    def test_checkpoint_state_excludes_runtime_secrets_and_large_artifacts(
+        self,
+    ) -> None:
+        from server.graph.state import CourseGraphContext, CourseState
+
+        forbidden = {
+            "api_key",
+            "llm_context",
+            "search_context",
+            "search_credentials",
+            "authorization",
+            "session_ref",
+            "cancel_event",
+            "content_markdown",
+            "source_excerpts",
+            "generation_brief",
+        }
+        state_fields = {name.lower() for name in CourseState.__annotations__}
+        context_fields = {
+            name.lower() for name in CourseGraphContext.__annotations__
+        }
+        self.assertTrue(forbidden.isdisjoint(state_fields))
+        self.assertIn("llm_context", context_fields)
+        self.assertIn("search_context", context_fields)
 
 
 class GeneratorNodeTests(unittest.IsolatedAsyncioTestCase):

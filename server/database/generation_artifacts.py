@@ -258,14 +258,17 @@ class GenerationArtifactStore:
         self, node_id: str
     ) -> Optional[GenerationBrief]:
         """Return the stored brief for a node, or None when absent."""
-        with optional_transaction(self.db_path, None) as conn:
-            row = conn.execute(
-                "SELECT payload_json FROM generation_briefs WHERE node_id = ?",
-                (node_id,),
-            ).fetchone()
-        if row is None:
+        try:
+            with optional_transaction(self.db_path, None) as conn:
+                row = conn.execute(
+                    "SELECT payload_json FROM generation_briefs WHERE node_id = ?",
+                    (node_id,),
+                ).fetchone()
+            if row is None:
+                return None
+            return GenerationBrief.model_validate_json(row["payload_json"])
+        except sqlite3.OperationalError:
             return None
-        return GenerationBrief.model_validate_json(row["payload_json"])
 
     def get_briefs(
         self,
