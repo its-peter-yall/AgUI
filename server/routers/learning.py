@@ -41,13 +41,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from server.agents.planner import OutlineTopicCountError
-from server.database.generation_jobs import generation_job_store
+from server.database.generation_jobs import (
+    GenerationJobNotFound,
+    InvalidGenerationTransition,
+    generation_job_store,
+)
 from server.database.learning_persistence import learning_manager
 from server.database.progress_events import progress_event_store
 from server.database.research_store import research_store
 from server.graph.build import get_graph
 from server.schemas.search import SearchContext, get_search_context
 from server.graph.regen import regenerate_failed_node, regenerate_topic_node
+from server.graph.runner import GenerationAlreadyRunning
 from server.schemas.generation import (
     GenerateCourseAcceptedResponse,
     GenerationControlResponse,
@@ -844,29 +849,164 @@ class DeleteLearningSessionResponse(BaseModel):
     deleted: bool = Field(..., description="Whether the session was deleted")
 
 
+@router.post(
+    "/sessions/{session_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Cancel generation",
+    description=(
+        "Request cooperative cancellation. Retains partial artifacts; "
+        "does not delete the session."
+    ),
+)
+async def cancel_generation(
+    session_id: str,
+    request: Request,
+) -> JSONResponse:
+    """Set cooperative cancel flag and return public generation state."""
+    session = learning_manager.get_learning_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Learning session not found: {session_id}",
+        )
+    runtime = getattr(request.app.state, "generation_runtime", None)
+    if runtime is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Generation runtime unavailable",
+        )
+    try:
+        result = await runtime.cancel(session_id)
+    except GenerationJobNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job not found: {session_id}",
+        ) from exc
+    except InvalidGenerationTransition as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Generation cannot be cancelled in its current stage",
+        ) from exc
+    except Exception:
+        logger.exception("Cancel failed for session %s", session_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
+    return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/sessions/{session_id}/resume",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Resume generation",
+    description=(
+        "Resume a paused or cancelled generation job using fresh credentials."
+    ),
+)
+async def resume_generation(
+    session_id: str,
+    request: Request,
+    llm_context: LLMContext = Depends(get_llm_context),
+    search_context: SearchContext = Depends(get_search_context),
+) -> JSONResponse:
+    """Resume generation with fresh LLM/search secrets."""
+    session = learning_manager.get_learning_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Learning session not found: {session_id}",
+        )
+    runtime = getattr(request.app.state, "generation_runtime", None)
+    if runtime is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Generation runtime unavailable",
+        )
+    try:
+        result = await runtime.resume(
+            session_id=session_id,
+            llm_context=llm_context,
+            search_context=search_context,
+        )
+    except HTTPException:
+        raise
+    except GenerationAlreadyRunning as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Generation is already running or not resumable",
+        ) from exc
+    except InvalidGenerationTransition as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Generation cannot be resumed in its current stage",
+        ) from exc
+    except GenerationJobNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Generation job not found: {session_id}",
+        ) from exc
+    except Exception:
+        logger.exception("Resume failed for session %s", session_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
+    return JSONResponse(content=result, status_code=status.HTTP_202_ACCEPTED)
+
+
 @router.delete(
     "/sessions/{session_id}",
     response_model=DeleteLearningSessionResponse,
     summary="Delete learning session",
     description=(
-        "Delete a learning session and all related data including "
-        "concept nodes, quiz attempts, and revision sessions."
+        "Stop local generation work, delete session artifacts, and remove "
+        "the checkpoint thread. This is the only permanent cleanup path."
     ),
 )
-def delete_learning_session(session_id: str) -> DeleteLearningSessionResponse:
+async def delete_learning_session(
+    session_id: str,
+    request: Request,
+) -> DeleteLearningSessionResponse:
     """Delete a learning session by ID with cascade deletion."""
     try:
+        session = learning_manager.get_learning_session(session_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Learning session not found: {session_id}",
+            )
+
+        runtime = getattr(request.app.state, "generation_runtime", None)
+        if runtime is not None:
+            try:
+                await runtime.stop_for_delete(session_id)
+            except Exception:
+                logger.exception(
+                    "stop_for_delete failed for session %s", session_id
+                )
+
         deleted = learning_manager.delete_learning_session(session_id)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Learning session not found: {session_id}",
             )
+
+        checkpointer = getattr(request.app.state, "checkpointer", None)
+        if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
+            try:
+                await checkpointer.adelete_thread(f"gen-{session_id}")
+            except Exception:
+                logger.exception(
+                    "Checkpoint delete failed for session %s", session_id
+                )
+
         return DeleteLearningSessionResponse(deleted=True)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error deleting learning session: {e}")
+    except Exception:
+        logger.exception("Error deleting learning session")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
