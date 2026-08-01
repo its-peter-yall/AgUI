@@ -20,10 +20,13 @@
  *    - getActiveProviderConfig(): Shorthand to active provider's config
  *    - setProviderConfig(): Update a specific provider's configuration
  *    - clearProviderConfig(): Reset a specific provider's configuration
+ *    - getWebSearchSettings(): Safe load of browser-only web search settings
+ *    - setWebSearchSettings(): Persist web search settings to its own key
+ *    - hasWebSearchCapability(): Master + enabled provider + nonblank key check
  *
  * DEPENDENCIES:
  *    - External: None
- *    - Internal: @/types/provider
+ *    - Internal: @/types/provider, @/types/webSearch, @/lib/webSearchProviders
  *
  * USAGE:
  *    import { getProviderSettings, setProviderConfig } from '@/lib/providerSettings';
@@ -31,6 +34,12 @@
  */
 
 import type { AIProvider, ThinkingConfig } from "@/types/provider";
+import type {
+	WebSearchProviderConfig,
+	WebSearchProviderId,
+	WebSearchSettings,
+} from "@/types/webSearch";
+import { WEB_SEARCH_PROVIDER_IDS } from "@/lib/webSearchProviders";
 
 const STORAGE_KEY = "ai_provider_settings";
 const LEGACY_STORAGE_KEY = "openrouter_settings";
@@ -302,4 +311,119 @@ export function maskApiKey(key: string | undefined | null): string {
 	}
 	const suffix = key.slice(-4);
 	return `${key.slice(0, 6)}...${suffix}`;
+}
+
+export const WEB_SEARCH_STORAGE_KEY = "web_search_settings";
+
+function createDefaultWebSearchSettings(): WebSearchSettings {
+	return {
+		masterEnabled: false,
+		providers: {
+			tavily: { apiKey: "", enabled: false },
+			exa: { apiKey: "", enabled: false },
+			brave: { apiKey: "", enabled: false },
+			serpapi: { apiKey: "", enabled: false },
+		},
+	};
+}
+
+/**
+ * Reads web-search settings from their own localStorage key, defaulting
+ * missing or invalid fields and discarding unknown providers. Never rewrites
+ * malformed storage and returns fresh nested objects.
+ */
+export function getWebSearchSettings(): WebSearchSettings {
+	const fallback = createDefaultWebSearchSettings();
+	try {
+		const raw = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
+		if (!raw) {
+			return fallback;
+		}
+		const parsed = JSON.parse(raw) as Partial<WebSearchSettings>;
+		const providers = { ...fallback.providers };
+		const parsedProviders =
+			parsed && typeof parsed === "object" ? parsed.providers : undefined;
+		if (parsedProviders && typeof parsedProviders === "object") {
+			for (const providerId of WEB_SEARCH_PROVIDER_IDS) {
+				const entry = parsedProviders[providerId] as
+					| Partial<WebSearchProviderConfig>
+					| undefined;
+				if (!entry || typeof entry !== "object") {
+					continue;
+				}
+				providers[providerId] = {
+					apiKey:
+						typeof entry.apiKey === "string" ? entry.apiKey : "",
+					enabled:
+						typeof entry.enabled === "boolean" ? entry.enabled : false,
+				};
+			}
+		}
+		return {
+			masterEnabled:
+				typeof parsed?.masterEnabled === "boolean"
+					? parsed.masterEnabled
+					: false,
+			providers,
+		};
+	} catch {
+		return fallback;
+	}
+}
+
+/**
+ * Persists web-search settings only to WEB_SEARCH_STORAGE_KEY.
+ */
+export function setWebSearchSettings(settings: WebSearchSettings): void {
+	localStorage.setItem(WEB_SEARCH_STORAGE_KEY, JSON.stringify(settings));
+}
+
+/**
+ * Enables or disables web search at the master level.
+ */
+export function setWebSearchMasterEnabled(enabled: boolean): void {
+	const settings = getWebSearchSettings();
+	setWebSearchSettings({ ...settings, masterEnabled: enabled });
+}
+
+/**
+ * Updates a single provider's key and/or enablement.
+ */
+export function setWebSearchProviderConfig(
+	providerId: WebSearchProviderId,
+	config: Partial<WebSearchProviderConfig>,
+): void {
+	const settings = getWebSearchSettings();
+	setWebSearchSettings({
+		...settings,
+		providers: {
+			...settings.providers,
+			[providerId]: {
+				...settings.providers[providerId],
+				...config,
+			},
+		},
+	});
+}
+
+/**
+ * Returns enabled providers with nonblank keys in registry display order.
+ */
+export function getConfiguredWebSearchProviders(): WebSearchProviderId[] {
+	const settings = getWebSearchSettings();
+	return WEB_SEARCH_PROVIDER_IDS.filter(
+		(providerId) =>
+			settings.providers[providerId].enabled &&
+			settings.providers[providerId].apiKey.trim().length > 0,
+	);
+}
+
+/**
+ * True only when the master switch and at least one provider key are set.
+ */
+export function hasWebSearchCapability(): boolean {
+	return (
+		getWebSearchSettings().masterEnabled &&
+		getConfiguredWebSearchProviders().length > 0
+	);
 }
