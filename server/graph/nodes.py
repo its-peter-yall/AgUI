@@ -69,6 +69,7 @@ from server.schemas.generation import (
     GroundingStatus,
 )
 from server.schemas.learning import CourseOutline, FailedStep, NodeStatus, QuizSet, TopicNode
+from server.schemas.progress import ProgressEventType
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 from server.services.research_runner import run_research
