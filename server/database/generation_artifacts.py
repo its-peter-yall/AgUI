@@ -632,3 +632,6 @@ class GenerationArtifactStore:
             }
             for row in rows
         ]
+
+
+generation_artifact_store = GenerationArtifactStore()
