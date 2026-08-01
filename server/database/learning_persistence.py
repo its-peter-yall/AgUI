@@ -584,6 +584,26 @@ class LearningManager:
         finally:
             conn.close()
 
+    def update_session_resolved_mode(
+        self, session_id: str, resolved_mode: str
+    ) -> None:
+        """Persist resolved depth mode (lite|full) on learning session."""
+        if resolved_mode not in ("lite", "full"):
+            raise ValueError(f"Invalid resolved_mode: {resolved_mode}")
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE learning_sessions
+                SET resolved_mode = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (resolved_mode, session_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def create_revision_session(
         self,
         original_session_id: str,

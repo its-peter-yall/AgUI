@@ -198,21 +198,23 @@ async def run_generation_job(
             except Exception:
                 session = None
             query = ""
-            mode = "full"
-            resolved_mode = "full"
+            mode = "auto"
+            resolved_mode = None
             if session:
                 query = session.get("query") or ""
-                mode = session.get("mode") or "full"
-                resolved_mode = session.get("resolved_mode") or mode
-            if mode == "auto":
-                resolved_mode = "full"
+                mode = session.get("mode") or "auto"
+                resolved_mode = session.get("resolved_mode")
+            # M7: leave auto unresolved here; initialize_generation_node
+            # calls depth_router and persists the same value for research+plan.
+            if resolved_mode not in ("lite", "full"):
+                resolved_mode = None
             input_data = {
                 "job_id": job.id,
                 "session_id": session_id,
                 "query": query,
                 "user_id": session.get("user_id") if session else None,
                 "mode": mode,
-                "resolved_mode": resolved_mode if resolved_mode != "auto" else "full",
+                "resolved_mode": resolved_mode,
                 "web_search_enabled": search_context.enabled,
                 "research_report_id": None,
                 "topic_count": 0,

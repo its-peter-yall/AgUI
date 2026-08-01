@@ -462,6 +462,49 @@ class GenerationArtifactStore:
             raise LookupError(f"Node not found: {node_id}")
         return _node_row_to_dict(row)
 
+    def has_durable_content(self, node_id: str) -> bool:
+        """True when topic already has non-empty generated markdown."""
+        try:
+            with optional_transaction(self.db_path, None) as conn:
+                row = conn.execute(
+                    """
+                    SELECT content_markdown, generation_status
+                    FROM concept_nodes WHERE id = ?
+                    """,
+                    (node_id,),
+                ).fetchone()
+            if row is None:
+                return False
+            content = (row["content_markdown"] or "").strip()
+            status = (row["generation_status"] or "").upper()
+            if not content:
+                return False
+            return status in {GENERATING_STATUS, READY_STATUS, "READY", "GENERATING"}
+        except sqlite3.OperationalError:
+            return False
+
+    def persist_content_with_citations(
+        self,
+        *,
+        node_id: str,
+        content_markdown: str,
+        citations: list[SourceCitation],
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> dict[str, Any]:
+        """Atomically persist content and replace citation set (M13)."""
+        with optional_transaction(self.db_path, conn) as active_conn:
+            result = self.persist_generated_content(
+                node_id=node_id,
+                content_markdown=content_markdown,
+                conn=active_conn,
+            )
+            self.replace_node_sources(
+                node_id,
+                citations,
+                conn=active_conn,
+            )
+            return result
+
     def persist_topic_success(
         self,
         node_id: str,
@@ -538,12 +581,12 @@ class GenerationArtifactStore:
                     node_id,
                 ),
             )
-            if citations:
-                self.replace_node_sources(
-                    node_id,
-                    citations,
-                    conn=active_conn,
-                )
+            # Always replace citation set, including empty (M13).
+            self.replace_node_sources(
+                node_id,
+                citations,
+                conn=active_conn,
+            )
             row = active_conn.execute(
                 f"SELECT {NODE_DICT_KEYS} FROM concept_nodes WHERE id = ?",
                 (node_id,),

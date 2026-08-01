@@ -81,6 +81,7 @@ from server.schemas.progress import (
 from server.schemas.generation import GenerationWarning
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
+from server.services.depth_router import resolve_depth_mode
 from server.services.research_runner import ResearchCancelled, run_research
 
 logger = logging.getLogger(__name__)
@@ -327,11 +328,39 @@ async def initialize_generation_node(
     raise_if_cancel_requested(session_id)
 
     user_mode = state.get("mode") or "auto"
-    resolved_mode = state.get("resolved_mode") or "lite"
-    if user_mode != "auto" and user_mode in ("lite", "full"):
+    existing = state.get("resolved_mode")
+    if existing in ("lite", "full") and user_mode == "auto":
+        # Resume: keep previously persisted resolution.
+        resolved_mode = existing
+    elif user_mode in ("lite", "full"):
         resolved_mode = user_mode
-    elif resolved_mode not in ("lite", "full"):
-        resolved_mode = "lite"
+    else:
+        llm_ctx = None
+        try:
+            llm_ctx = _get_llm_context(runtime)
+        except Exception:
+            llm_ctx = None
+        resolved_mode = await resolve_depth_mode(
+            query=str(state.get("query") or ""),
+            mode=user_mode,
+            llm_context=llm_ctx,
+        )
+
+    # Persist resolved mode once on the learning session row.
+    try:
+        learning_manager.update_session_resolved_mode(
+            session_id, resolved_mode
+        )
+    except Exception:
+        try:
+            # Fallback: some managers expose generic session update.
+            learning_manager.update_learning_session(
+                session_id, resolved_mode=resolved_mode
+            )
+        except Exception:
+            logger.debug(
+                "Could not persist resolved_mode for session %s", session_id
+            )
 
     search_ctx = _get_search_context(runtime)
     web_enabled = state.get("web_search_enabled")
@@ -536,16 +565,74 @@ async def plan_brief_batch_node(
     web_enabled = state.get("web_search_enabled", False)
     degraded = state.get("degraded", False)
 
+    # M5: reuse durable briefs for this batch when already present.
+    existing_briefs = generation_artifact_store.get_briefs(
+        session_id, batch.start, batch.size
+    )
+    if len(existing_briefs) >= batch.size:
+        logger.info(
+            "Reusing durable briefs for session %s batch start=%s",
+            session_id,
+            batch.start,
+        )
+        _bump_job_counts(
+            session_id,
+            briefs_ready=batch.start + batch.size,
+        )
+        stage_gen = (
+            GenerationStage.GENERATING_PREVIEW
+            if batch.start == 0
+            else GenerationStage.GENERATING_BATCH
+        )
+        _fenced_update_stage(session_id, stage_gen, runtime)
+        progress_event_store.append_once(
+            session_id=session_id,
+            event_type=ProgressEventType.STAGE_CHANGED,
+            payload=StageChangedPayload(
+                previous_stage=stage_plan,
+                stage=stage_gen,
+            ),
+            dedupe_key=f"stage_gen_batch_{batch.start}",
+        )
+        return {
+            "active_batch_start": batch.start,
+            "active_batch_size": batch.size,
+        }
+
     if not web_enabled:
         grounding_status = GroundingStatus.DISABLED
         research_context = None
+        allowed_source_ids: set[str] = set()
     elif degraded:
         grounding_status = GroundingStatus.DEGRADED
         research_context = None
+        allowed_source_ids = set()
     else:
         grounding_status = GroundingStatus.GROUNDED
         report_id = state.get("research_report_id")
-        research_context = research_store.get_report_context(report_id, max_bytes=8000) if report_id else None
+        # M4: topic-scoped structured planner context, not whole report dump.
+        research_context = None
+        allowed_source_ids = set()
+        if report_id:
+            try:
+                planner_ctx = research_store.get_planner_context(
+                    session_id, max_excerpt_chars=1200
+                )
+                research_context = _format_topic_scoped_context(
+                    planner_ctx,
+                    outline=outline,
+                    start_index=batch.start,
+                    batch_size=batch.size,
+                )
+                allowed_source_ids = {
+                    str(src.get("id"))
+                    for src in (planner_ctx.get("sources") or [])
+                    if src.get("id")
+                }
+            except Exception:
+                research_context = research_store.get_report_context(
+                    report_id, max_bytes=8000
+                )
 
     logger.info("Planning brief batch for session %s (start=%s, size=%s)", session_id, batch.start, batch.size)
 
@@ -562,6 +649,14 @@ async def plan_brief_batch_node(
     except ResumablePlannerError as exc:
         logger.error("Planner brief validation failed for session %s: %s", session_id, exc)
         raise ResumableGenerationError(f"Brief generation failed: {exc}") from exc
+
+    # M4: validate brief source IDs against persisted store before write.
+    brief_batch = _validate_brief_batch_sources(
+        brief_batch,
+        session_id=session_id,
+        report_id=state.get("research_report_id"),
+        allowed_source_ids=allowed_source_ids,
+    )
 
     generation_artifact_store.persist_briefs(session_id, brief_batch)
     _bump_job_counts(
@@ -624,6 +719,19 @@ async def generator_node(
     node_id = generation_artifact_store.node_id_for_topic(session_id, seq_idx)
 
     try:
+        # M5: skip generator when content already durable for this topic.
+        if generation_artifact_store.has_durable_content(node_id):
+            return {
+                "generator_results": [
+                    {
+                        "batch_start": batch_start,
+                        "sequence_index": seq_idx,
+                        "content_ready": True,
+                        "error_message": None,
+                    }
+                ]
+            }
+
         topic = generation_artifact_store.get_topic(session_id, seq_idx)
         brief = generation_artifact_store.get_brief(node_id)
         prev_summary, next_summary = (
@@ -638,20 +746,12 @@ async def generator_node(
             llm_context=llm_ctx,
         )
 
-        generation_artifact_store.persist_generated_content(
+        # M13: transactional content + citation replacement (incl. empty).
+        generation_artifact_store.persist_content_with_citations(
             node_id=node_id,
             content_markdown=content.content_markdown,
+            citations=list(content.citations or []),
         )
-        if content.citations:
-            try:
-                generation_artifact_store.replace_node_sources(
-                    node_id,
-                    content.citations,
-                )
-            except Exception:
-                logger.debug(
-                    "citation persist deferred for node %s", node_id
-                )
 
         return {
             "generator_results": [
@@ -957,7 +1057,52 @@ async def advance_batch_node(
     size = state["active_batch_size"]
     next_index = start + size
 
-    _fenced_update_progress(session_id, next_index, runtime)
+    # M6: verify every durable node in batch is READY or ERROR.
+    nodes = learning_manager.get_session_nodes(session_id)
+    batch_nodes = [
+        n
+        for n in nodes
+        if start <= int(n.get("sequence_index", -1)) < start + size
+    ]
+    if len(batch_nodes) < size:
+        raise ResumableGenerationError(
+            f"Batch barrier incomplete: expected {size} nodes, found "
+            f"{len(batch_nodes)} for session {session_id}"
+        )
+    nonterminal: list[str] = []
+    for node in batch_nodes:
+        gen_status = (node.get("generation_status") or "").upper()
+        learner = (node.get("status") or "").upper()
+        if gen_status == "READY":
+            continue
+        if gen_status == "ERROR" or learner == "ERROR":
+            continue
+        nonterminal.append(str(node.get("id")))
+    if nonterminal:
+        raise ResumableGenerationError(
+            f"Batch barrier blocked: nonterminal nodes {nonterminal}"
+        )
+
+    # Exact global READY/ERROR counts — never count failed as ready.
+    global_ready = sum(
+        1
+        for n in nodes
+        if (n.get("generation_status") or "").upper() == "READY"
+    )
+    global_failed = sum(
+        1
+        for n in nodes
+        if (n.get("generation_status") or "").upper() == "ERROR"
+        or (n.get("status") or "").upper() == "ERROR"
+    )
+    lock = _get_lock(runtime)
+    generation_job_store.update_progress(
+        session_id,
+        next_index,
+        lock=lock,
+        topics_ready=global_ready,
+        topics_failed=global_failed,
+    )
 
     return {
         "next_topic_index": next_index,
@@ -1040,6 +1185,12 @@ async def finalize_generation_node(
     except Exception:
         logger.debug("finalize events skipped for session %s", session_id)
 
+    # M14: compact event log on terminal stage.
+    try:
+        progress_event_store.compact_completed(session_id)
+    except Exception:
+        logger.debug("event compact skipped for session %s", session_id)
+
     logger.info(
         "Generation job finalized for session %s with stage %s",
         session_id,
@@ -1051,3 +1202,103 @@ async def finalize_generation_node(
 def build_response_node(state: CourseState) -> dict[str, Any]:
     """Legacy helper for backward compatibility."""
     return {}
+
+
+def _format_topic_scoped_context(
+    planner_ctx: dict[str, Any],
+    *,
+    outline: CourseOutline,
+    start_index: int,
+    batch_size: int,
+) -> str:
+    """Build capped topic-scoped research text for a brief batch."""
+    topics = list(getattr(outline, "topics", []) or [])
+    batch_topics = topics[start_index : start_index + batch_size]
+    titles = {
+        str(getattr(t, "title", "") or "").lower()
+        for t in batch_topics
+    }
+    parts: list[str] = []
+    for section in planner_ctx.get("sections") or []:
+        theme = str(section.get("theme") or "")
+        markdown = str(section.get("markdown") or "")
+        theme_l = theme.lower()
+        if titles and not any(
+            title and (title in theme_l or theme_l in title)
+            for title in titles
+        ):
+            # Keep fundamentals-style sections for every batch.
+            if "fundamental" not in theme_l and start_index > 0:
+                continue
+        parts.append(f"## {theme}\n{markdown}")
+    for source in (planner_ctx.get("sources") or [])[:12]:
+        sid = source.get("id")
+        excerpt = (source.get("excerpt") or "")[:400]
+        title = source.get("title") or ""
+        if sid and excerpt:
+            parts.append(f"[source:{sid}] {title}\n{excerpt}")
+    text = "\n\n".join(parts)
+    return text[:8000]
+
+
+def _validate_brief_batch_sources(
+    brief_batch: Any,
+    *,
+    session_id: str,
+    report_id: Optional[str],
+    allowed_source_ids: set[str],
+) -> Any:
+    """Drop fabricated brief source IDs before durable persist."""
+    briefs = list(getattr(brief_batch, "briefs", None) or [])
+    if not briefs:
+        return brief_batch
+    persisted_ids: set[str] = set(allowed_source_ids)
+    if report_id or session_id:
+        try:
+            stored = research_store.get_sources_by_ids(
+                session_id,
+                list(allowed_source_ids) if allowed_source_ids else [],
+            )
+            if allowed_source_ids:
+                persisted_ids = {s.id for s in stored}
+            else:
+                # Load all session sources when allowlist empty but grounded.
+                ctx = research_store.get_planner_context(
+                    session_id, max_excerpt_chars=1
+                )
+                persisted_ids = {
+                    str(s.get("id"))
+                    for s in (ctx.get("sources") or [])
+                    if s.get("id")
+                }
+        except Exception:
+            persisted_ids = set(allowed_source_ids)
+
+    cleaned = []
+    for brief in briefs:
+        excerpts = list(getattr(brief, "source_excerpts", None) or [])
+        if not excerpts:
+            cleaned.append(brief)
+            continue
+        valid = [
+            ex
+            for ex in excerpts
+            if getattr(ex, "source_id", None) in persisted_ids
+        ]
+        report_ok = getattr(brief, "research_report_id", None)
+        if report_id and report_ok and report_ok != report_id:
+            report_ok = report_id
+        cleaned.append(
+            brief.model_copy(
+                update={
+                    "source_excerpts": valid or None,
+                    "research_report_id": report_ok
+                    if valid
+                    else getattr(brief, "research_report_id", None),
+                }
+            )
+        )
+    try:
+        return brief_batch.model_copy(update={"briefs": cleaned})
+    except Exception:
+        return brief_batch

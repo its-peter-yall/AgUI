@@ -104,7 +104,7 @@ async def execute_search_request(
     """
     timeout = httpx.Timeout(timeout_seconds)
     try:
-        response = await client.request(
+        async with client.stream(
             method,
             url,
             headers=headers,
@@ -112,7 +112,41 @@ async def execute_search_request(
             params=params,
             timeout=timeout,
             follow_redirects=False,
-        )
+        ) as response:
+            # Reject redirects explicitly (3xx)
+            if response.is_redirect:
+                raise SearchError(
+                    provider_id=provider_id,
+                    error_class=SearchErrorClass.INVALID_RESPONSE,
+                    status_code=response.status_code,
+                )
+
+            raise_for_search_status(response, provider_id=provider_id)
+
+            # Early reject when Content-Length already exceeds cap.
+            content_length_header = response.headers.get("Content-Length")
+            if content_length_header is not None:
+                try:
+                    stated_length = int(content_length_header)
+                except ValueError:
+                    stated_length = None
+                else:
+                    if stated_length > max_bytes:
+                        raise SearchError(
+                            provider_id=provider_id,
+                            error_class=SearchErrorClass.INVALID_RESPONSE,
+                            status_code=response.status_code,
+                        )
+
+            payload, raw_len = await read_capped_json(
+                response,
+                max_bytes=max_bytes,
+                provider_id=provider_id,
+                return_byte_count=True,
+            )
+            return payload, int(raw_len)
+    except SearchError:
+        raise
     except httpx.TimeoutException as exc:
         raise SearchError(
             provider_id=provider_id,
@@ -123,42 +157,3 @@ async def execute_search_request(
             provider_id=provider_id,
             error_class=SearchErrorClass.AVAILABILITY,
         ) from exc
-
-    # Reject redirects explicitly (3xx) via status mapper / invalid response
-    if response.is_redirect:
-        raise SearchError(
-            provider_id=provider_id,
-            error_class=SearchErrorClass.INVALID_RESPONSE,
-            status_code=response.status_code,
-        )
-
-    raise_for_search_status(response, provider_id=provider_id)
-
-    # Prefer Content-Length when present; still cap streamed body.
-    content_length_header = response.headers.get("Content-Length")
-    stated_length: Optional[int] = None
-    if content_length_header is not None:
-        try:
-            stated_length = int(content_length_header)
-        except ValueError:
-            stated_length = None
-        if stated_length is not None and stated_length > max_bytes:
-            raise SearchError(
-                provider_id=provider_id,
-                error_class=SearchErrorClass.INVALID_RESPONSE,
-                status_code=response.status_code,
-            )
-
-    payload = await read_capped_json(
-        response,
-        max_bytes=max_bytes,
-        provider_id=provider_id,
-    )
-    # response.content may be populated after aiter; len of encoded payload
-    raw_len = stated_length
-    if raw_len is None:
-        try:
-            raw_len = len(response.content)
-        except Exception:
-            raw_len = 0
-    return payload, int(raw_len)

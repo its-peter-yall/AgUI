@@ -855,8 +855,15 @@ class GenerationJobStore:
         completed_topics: int,
         *,
         lock: Optional[GenerationLock] = None,
+        topics_ready: Optional[int] = None,
+        topics_failed: Optional[int] = None,
     ) -> None:
-        """Update cursor next_topic_index for session; fence when lock given."""
+        """Update cursor next_topic_index for session; fence when lock given.
+
+        When topics_ready/topics_failed provided, set exact counts. Never
+        treat completed_topics (cursor) as READY count — failed topics are
+        not ready (M6).
+        """
         timestamp = _utc_now(None)
         with optional_transaction(self.db_path, None) as conn:
             if lock is not None:
@@ -880,13 +887,13 @@ class GenerationJobStore:
                 update={"next_topic_index": completed_topics}
             )
             counts = GenerationCounts.model_validate_json(row["counts_json"])
-            counts = counts.model_copy(
-                update={
-                    "topics_ready": max(
-                        counts.topics_ready, completed_topics
-                    )
-                }
-            )
+            count_updates: dict = {}
+            if topics_ready is not None:
+                count_updates["topics_ready"] = max(0, int(topics_ready))
+            if topics_failed is not None:
+                count_updates["topics_failed"] = max(0, int(topics_failed))
+            if count_updates:
+                counts = counts.model_copy(update=count_updates)
             conn.execute(
                 """
                 UPDATE generation_jobs

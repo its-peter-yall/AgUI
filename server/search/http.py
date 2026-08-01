@@ -152,16 +152,18 @@ async def read_capped_json(
     *,
     max_bytes: int,
     provider_id: SearchProviderId,
+    return_byte_count: bool = False,
 ) -> Any:
     """Read response body up to max_bytes and parse JSON safely.
 
     Args:
-        response: Successful httpx response.
+        response: Successful httpx response (prefer streamed).
         max_bytes: Hard byte cap before INVALID_RESPONSE.
         provider_id: Provider for safe error tagging.
+        return_byte_count: When True, return (payload, actual_bytes).
 
     Returns:
-        Parsed JSON value.
+        Parsed JSON value, or (payload, actual_bytes) when requested.
 
     Raises:
         SearchError: On oversize body or malformed JSON.
@@ -200,13 +202,16 @@ async def read_capped_json(
         ) from exc
     raw = b"".join(chunks)
     try:
-        return json.loads(raw.decode("utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SearchError(
             provider_id=provider_id,
             error_class=SearchErrorClass.INVALID_RESPONSE,
             status_code=response.status_code,
         ) from exc
+    if return_byte_count:
+        return payload, total
+    return payload
 
 
 def redact_secret_query_values(url: str) -> str:
