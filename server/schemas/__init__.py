@@ -27,6 +27,18 @@ USAGE:
 """
 
 from server.schemas.common import ResponseBase, TimestampMixin
+from server.schemas.generation import (
+    BriefSourceExcerpt,
+    GenerationBrief,
+    GenerationBriefBatch,
+    GenerationCounts,
+    GenerationCursor,
+    GenerationStage,
+    GenerationWarning,
+    GroundingStatus,
+    ResearchCursor,
+    SourceCitation,
+)
 from server.schemas.learning import (
     NodeStatus,
     QuizDifficulty,
