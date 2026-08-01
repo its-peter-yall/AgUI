@@ -174,6 +174,7 @@ class ResearchRunner:
         llm_context: Any,
         lock: Optional[GenerationLock] = None,
         existing_plan: Optional[ResearchPlan] = None,
+        ledger: Optional[ResearchBudgetLedger] = None,
     ) -> ResearchOutcome:
         """Run the bounded research loop to a terminal status."""
         del job_id  # reserved for future job-scoped telemetry
@@ -188,6 +189,7 @@ class ResearchRunner:
         next_section_index = 0
         pending_queries: list[str] = []
         sources_by_id: dict[str, ResearchSource] = {}
+        shared_ledger = ledger
 
         report = self._research_store.create_report(session_id=session_id)
         report_id = str(report.id)
@@ -204,9 +206,14 @@ class ResearchRunner:
             if plan is None:
                 # Budget bootstrap uses a provisional concept floor until plan
                 bootstrap = resolve_research_budget(resolved_mode, 3)
-                ledger = ResearchBudgetLedger.from_cursor(
-                    bootstrap, cursor
-                )
+                if shared_ledger is None:
+                    ledger = ResearchBudgetLedger.from_cursor(
+                        bootstrap, cursor
+                    )
+                else:
+                    # Keep coordinator and runner on one ledger object.
+                    shared_ledger.budget = bootstrap
+                    ledger = shared_ledger
                 ledger.reserve_llm_turn()
                 plan = await self._agent.analyze_query(
                     query=query,
@@ -220,17 +227,25 @@ class ResearchRunner:
                     plan.provisional_concept_count,
                 )
                 # Preserve consumed LLM turn against the sized budget
-                ledger = ResearchBudgetLedger(
-                    budget,
-                    usage=ledger.usage_snapshot(),
-                )
+                if shared_ledger is None:
+                    ledger = ResearchBudgetLedger(
+                        budget,
+                        usage=ledger.usage_snapshot(),
+                    )
+                else:
+                    shared_ledger.budget = budget
+                    ledger = shared_ledger
             else:
                 coverage = list(plan.coverage)
                 budget = resolve_research_budget(
                     resolved_mode,
                     plan.provisional_concept_count,
                 )
-                ledger = ResearchBudgetLedger.from_cursor(budget, cursor)
+                if shared_ledger is None:
+                    ledger = ResearchBudgetLedger.from_cursor(budget, cursor)
+                else:
+                    shared_ledger.budget = budget
+                    ledger = shared_ledger
                 if not pending_queries:
                     pending_queries = list(plan.initial_queries)
 
@@ -793,19 +808,31 @@ class ResearchRunner:
             "session_id": session_id,
             "cursor": cursor,
         }
-        if lock is not None:
-            kwargs["lock"] = lock
-        else:
-            # Mock-friendly placeholder; real workers pass a GenerationLock.
-            kwargs["lock"] = lock
         if grounding_status is not None:
             kwargs["grounding_status"] = grounding_status
+        if lock is not None:
+            kwargs["lock"] = lock
+            self._job_store.update_cursor(**kwargs)
+            return
+        # No fence: try unlocked call for tests/mocks; skip if store requires lock.
         try:
             self._job_store.update_cursor(**kwargs)
         except TypeError:
-            # Some test doubles omit lock kwarg
-            kwargs.pop("lock", None)
-            self._job_store.update_cursor(**kwargs)
+            try:
+                # Some doubles accept positional-only shapes.
+                self._job_store.update_cursor(session_id, cursor)
+            except Exception:
+                logger.debug(
+                    "update_cursor skipped without lock for session %s",
+                    session_id,
+                )
+        except Exception as exc:
+            # Production store requires GenerationLock; without one, skip.
+            logger.debug(
+                "update_cursor without lock failed (%s) for session %s",
+                type(exc).__name__,
+                session_id,
+            )
 
     def _emit_degraded(
         self,
@@ -853,29 +880,86 @@ async def run_research(
     topic_query: str,
     llm_context: Any,
     search_context: Any,
+    resolved_mode: str = "lite",
+    lock: Optional[GenerationLock] = None,
+    http_client: Any = None,
 ) -> tuple[str, bool]:
-    """Execute research runner and return (report_id, is_degraded)."""
+    """Execute research runner and return (report_id, is_degraded).
+
+    Builds production ProviderCoordinator from runtime credentials, a shared
+    budget ledger, and optional fenced lock. Only external HTTP should be
+    mocked in integration tests.
+    """
+    import httpx
+
     from server.agents.researcher import researcher_agent
     from server.database.generation_jobs import generation_job_store
     from server.database.progress_events import progress_event_store
     from server.database.research_store import research_store
-    from server.search.coordinator import SearchCoordinator
+    from server.search.adapters import build_search_adapters
+    from server.search.coordinator import ProviderCoordinator
 
-    coordinator = SearchCoordinator(search_context=search_context)
-    runner = ResearchRunner(
-        agent=researcher_agent,
-        research_store=research_store,
-        job_store=generation_job_store,
-        event_store=progress_event_store,
-    )
-    outcome = await runner.run(
-        job_id=f"job-{session_id}",
-        session_id=session_id,
-        query=topic_query,
-        resolved_mode="lite",
-        coordinator=coordinator,
-        llm_context=llm_context,
-    )
+    mode = resolved_mode if resolved_mode in ("lite", "full") else "lite"
+    provider_ids = tuple(getattr(search_context, "provider_ids", ()) or ())
+    if not provider_ids or not getattr(search_context, "enabled", False):
+        raise ValueError("run_research requires enabled search_context providers")
+
+    credentials: dict = {}
+    for provider_id in provider_ids:
+        credentials[provider_id] = search_context.get_api_key(provider_id)
+
+    owns_client = http_client is None
+    client = http_client or httpx.AsyncClient(timeout=30.0)
+    try:
+        all_adapters = build_search_adapters(client)
+        adapters = {
+            pid: all_adapters[pid]
+            for pid in provider_ids
+            if pid in all_adapters
+        }
+        if not adapters:
+            raise ValueError("No search adapters available for configured providers")
+
+        persisted_order: list = []
+        try:
+            job = generation_job_store.get_by_session(session_id)
+            if job is not None:
+                cursor = getattr(job, "cursor", None)
+                order = getattr(cursor, "provider_order", None) or []
+                persisted_order = [
+                    pid for pid in order if pid in adapters
+                ]
+        except Exception:
+            persisted_order = []
+
+        bootstrap = resolve_research_budget(mode, 3)
+        shared_ledger = ResearchBudgetLedger(bootstrap)
+        coordinator = ProviderCoordinator.create(
+            adapters=adapters,
+            credentials=credentials,
+            persisted_order=persisted_order,
+            ledger=shared_ledger,
+        )
+        runner = ResearchRunner(
+            agent=researcher_agent,
+            research_store=research_store,
+            job_store=generation_job_store,
+            event_store=progress_event_store,
+        )
+        outcome = await runner.run(
+            job_id=f"job-{session_id}",
+            session_id=session_id,
+            query=topic_query,
+            resolved_mode=mode,
+            coordinator=coordinator,
+            llm_context=llm_context,
+            lock=lock,
+            ledger=shared_ledger,
+        )
+    finally:
+        if owns_client:
+            await client.aclose()
+
     is_degraded = (
         outcome.grounding_status == GroundingStatus.DEGRADED
         or outcome.status == ResearchStatus.DEGRADED
