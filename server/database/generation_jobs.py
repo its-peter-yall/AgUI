@@ -757,15 +757,18 @@ class GenerationJobStore:
         stage: GenerationStage,
     ) -> None:
         """Update job stage without requiring a worker lock."""
-        with optional_transaction(self.db_path, None) as conn:
-            conn.execute(
-                """
-                UPDATE generation_jobs
-                SET stage = ?, updated_at = ?
-                WHERE session_id = ?
-                """,
-                (stage.value, _utc_now(None).isoformat(), session_id),
-            )
+        try:
+            with optional_transaction(self.db_path, None) as conn:
+                conn.execute(
+                    """
+                    UPDATE generation_jobs
+                    SET stage = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (stage.value, _utc_now(None).isoformat(), session_id),
+                )
+        except (sqlite3.OperationalError, LookupError):
+            pass
 
     def update_progress(
         self,
@@ -773,16 +776,19 @@ class GenerationJobStore:
         completed_topics: int,
     ) -> None:
         """Update cursor completed topics for session."""
-        with optional_transaction(self.db_path, None) as conn:
-            cursor_json = canonical_json(GenerationCursor(completed_topics=completed_topics))
-            conn.execute(
-                """
-                UPDATE generation_jobs
-                SET cursor_json = ?, updated_at = ?
-                WHERE session_id = ?
-                """,
-                (cursor_json, _utc_now(None).isoformat(), session_id),
-            )
+        try:
+            with optional_transaction(self.db_path, None) as conn:
+                cursor_json = canonical_json(GenerationCursor(completed_topics=completed_topics))
+                conn.execute(
+                    """
+                    UPDATE generation_jobs
+                    SET cursor_json = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (cursor_json, _utc_now(None).isoformat(), session_id),
+                )
+        except (sqlite3.OperationalError, LookupError):
+            pass
 
 
 generation_job_store = GenerationJobStore()
