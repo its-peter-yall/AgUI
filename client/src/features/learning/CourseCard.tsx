@@ -111,7 +111,16 @@ export function CourseCard({
 }: CourseCardProps) {
 	const isCompleted = session.status === "completed";
 	const progressPercent = Math.floor(session.progress_percent);
-	const genBadge = generationBadge(session.generation);
+	// M10: prefer nested generation; fall back to flat list fields.
+	const generation =
+		session.generation ??
+		(session.generation_stage
+			? ({
+					stage: session.generation_stage,
+					grounding_status: session.grounding_status ?? "PENDING",
+				} as CourseCardProps["session"]["generation"])
+			: null);
+	const genBadge = generationBadge(generation);
 	const [showConfirm, setShowConfirm] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
 	const cancelBtnRef = useRef<HTMLButtonElement>(null);

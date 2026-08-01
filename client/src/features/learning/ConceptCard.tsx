@@ -260,11 +260,12 @@ export function ConceptCard({
 		ERROR: "!",
 	};
 
-	// Show refresh button only for "In Progress" nodes
+	// Show refresh for in-progress and ERROR (M12 per-card regen).
 	const showRefreshButton =
 		node.status === "VIEWING_EXPLANATION" ||
 		node.status === "IN_QUIZ" ||
-		node.status === "SHOWING_FEEDBACK";
+		node.status === "SHOWING_FEEDBACK" ||
+		node.status === "ERROR";
 
 	const isLoadingPhase =
 		isRegenerating || (isRegeneratingLocal && streamingMarkdown === "");
@@ -355,7 +356,7 @@ export function ConceptCard({
 							</span>
 						</div>
 						<div className="flex items-center gap-2">
-							{onOpenTOC && (node.status === "VIEWING_EXPLANATION" || node.status === "COMPLETED") && (
+							{onOpenTOC && (
 								<button
 									type="button"
 									onClick={onOpenTOC}
@@ -754,6 +755,18 @@ export function ConceptCard({
 													questions={questions}
 													onAskQuestion={onAskQuestion}
 												/>
+											)}
+											{/* M12: retain citations after mastery */}
+											<SourceCitations citations={node.citations ?? []} />
+											{onViewSources && (
+												<button
+													type="button"
+													onClick={onViewSources}
+													className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+												>
+													<BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+													View course sources
+												</button>
 											)}
 										</div>
 									</details>

@@ -115,9 +115,11 @@ describe("ConceptCard Component", () => {
 			"IN_QUIZ",
 			"SHOWING_FEEDBACK",
 		];
-		const otherStatuses: ("LOCKED" | "COMPLETED" | "ERROR")[] = ["LOCKED", "COMPLETED", "ERROR"];
+		// M12: ERROR also shows per-card regen; LOCKED/COMPLETED do not.
+		const regenStatuses = [...inProgressStatuses, "ERROR" as const];
+		const otherStatuses: ("LOCKED" | "COMPLETED")[] = ["LOCKED", "COMPLETED"];
 
-		inProgressStatuses.forEach((status) => {
+		regenStatuses.forEach((status) => {
 			const { unmount } = renderWithProviders(
 				<ConceptCard node={{ ...mockNode, status }} isActive={true} />
 			);

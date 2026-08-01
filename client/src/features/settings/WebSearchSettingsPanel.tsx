@@ -59,7 +59,16 @@ export function WebSearchSettingsPanel() {
 
   const handleKeyChange = useCallback(
     (providerId: WebSearchProviderId, value: string) => {
-      setWebSearchProviderConfig(providerId, { apiKey: value });
+      // N6: blank key auto-disables provider so checkbox matches capability.
+      const trimmed = value.trim();
+      if (!trimmed) {
+        setWebSearchProviderConfig(providerId, {
+          apiKey: value,
+          enabled: false,
+        });
+      } else {
+        setWebSearchProviderConfig(providerId, { apiKey: value });
+      }
       setKeyErrors((prev) => {
         if (!prev[providerId]) return prev;
         const next = { ...prev };

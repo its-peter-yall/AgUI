@@ -259,6 +259,9 @@ export interface LearningSessionSummary {
 	completed_at: string | null;
 	revision_count: number;
 	generation?: GenerationJobPublic | null;
+	/** Flat list fallbacks when nested generation omitted */
+	generation_stage?: string | null;
+	grounding_status?: string | null;
 	title_finalized?: boolean;
 }
 

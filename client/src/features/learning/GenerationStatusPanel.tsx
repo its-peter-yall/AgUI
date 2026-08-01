@@ -70,10 +70,11 @@ export function GenerationStatusPanel({
   const copy = STAGE_COPY[stage] ?? stage;
   const counts = generation.counts;
   const isActive = !isTerminalGenerationStage(stage) && stage !== 'PAUSED';
+  const isStopping = isActive && (generation.cancel_requested || isCancelling);
   const isDegraded =
     generation.grounding_status === 'DEGRADED' ||
     stage === 'COMPLETE_DEGRADED';
-  const pending = isCancelling || isResuming || isDeleting;
+  const pending = isCancelling || isResuming || isDeleting || isStopping;
 
   return (
     <section
@@ -100,7 +101,7 @@ export function GenerationStatusPanel({
               role="status"
               aria-live="polite"
             >
-              {copy}
+              {isStopping ? 'Stopping...' : copy}
             </p>
           </div>
 
@@ -159,7 +160,7 @@ export function GenerationStatusPanel({
             <button
               type="button"
               onClick={onCancel}
-              disabled={pending}
+              disabled={pending || generation.cancel_requested}
               aria-label="Stop generation"
               className={cn(
                 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
@@ -169,7 +170,7 @@ export function GenerationStatusPanel({
               )}
             >
               <Square className="h-3.5 w-3.5" aria-hidden="true" />
-              {isCancelling ? 'Stopping...' : 'Stop'}
+              {isStopping ? 'Stopping...' : 'Stop'}
             </button>
           )}
           {generation.can_resume && (

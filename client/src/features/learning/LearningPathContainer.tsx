@@ -433,18 +433,27 @@ export function LearningPathContainer({
 				activeNodeIndex >= 0 &&
 				activeNodeIndex !== previousActiveNodeIndexRef.current
 			) {
-				// Only auto-advance if the active node index has ACTUALLY changed
-				// This prevents locking the user to the active node during manual navigation
+				// M11: only auto-advance when user was following the prior active
+				// learner node. Module READY arrival must not yank selected skeleton.
+				const prevIdx = previousActiveNodeIndexRef.current;
+				const wasFollowing =
+					carouselState.currentIndex === prevIdx ||
+					(prevIdx < 0 && carouselState.currentIndex === 0);
 				previousActiveNodeIndexRef.current = activeNodeIndex;
 
-				queueMicrotask(() => {
-					const direction =
-						activeNodeIndex > carouselState.currentIndex ? 1 : -1;
-					setCarouselStateBySession((prev) => ({
-						...prev,
-						[activeSessionKey]: { currentIndex: activeNodeIndex, direction },
-					}));
-				});
+				if (wasFollowing && activeNodeIndex > Math.max(prevIdx, -1)) {
+					queueMicrotask(() => {
+						const direction =
+							activeNodeIndex > carouselState.currentIndex ? 1 : -1;
+						setCarouselStateBySession((prev) => ({
+							...prev,
+							[activeSessionKey]: {
+								currentIndex: activeNodeIndex,
+								direction,
+							},
+						}));
+					});
+				}
 			}
 		}
 	}, [
@@ -762,28 +771,9 @@ export function LearningPathContainer({
 		);
 	}
 
-	const allNodesError = session.nodes.every((node) => node.status === "ERROR");
-	if (allNodesError) {
-		return (
-			<>
-				<ErrorState
-					title="Generation failed"
-					message="All topics failed to generate. Please try again."
-					onRetry={() => {
-						if (activeSessionId && refetchSession) {
-							refetchSession();
-							return;
-						}
-						if (query) {
-							generateMutation.mutate({ query, user_id: userId });
-						}
-					}}
-					showHomeLink
-				/>
-				<ToastContainer toasts={toasts} onDismiss={dismissToast} />
-			</>
-		);
-	}
+	// M12: keep ERROR cards visible with per-card regen (no global collapse).
+	const webSourcesRequested = !!session.generation?.web_search_requested;
+	const sourcesCallback = webSourcesRequested ? onOpenSources : undefined;
 
 	// Render learning path
 	return (
@@ -833,12 +823,21 @@ export function LearningPathContainer({
 								aria-roledescription="carousel"
 								aria-label="Learning path carousel"
 							>
-								{/* Slide counter */}
-								<div className="flex justify-center mb-4 text-sm text-muted-foreground">
+								{/* Slide counter + TOC (M11: available whenever nodes exist) */}
+								<div className="flex justify-center items-center gap-3 mb-4 text-sm text-muted-foreground">
 									<span>
 										Topic {carouselState.currentIndex + 1} of{" "}
 										{session.nodes.length}
 									</span>
+									{session.nodes.length > 0 && (
+										<button
+											type="button"
+											onClick={() => setIsTOCOpen(true)}
+											className="px-3 py-1 rounded-md border border-border/80 text-xs font-medium hover:bg-accent/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+										>
+											See all Topics
+										</button>
+									)}
 								</div>
 
 								{/* Single ConceptCard with direction-aware slide animation */}
@@ -909,7 +908,7 @@ export function LearningPathContainer({
 													<ConceptCard
 														node={currentSlideNode}
 														onOpenTOC={() => setIsTOCOpen(true)}
-														onViewSources={onOpenSources}
+														onViewSources={sourcesCallback}
 														isActive={currentSlideNode.id === activeNodeId}
 														quizResult={quizResults[currentSlideNode.id]}
 														onProceedToQuiz={handleProceedToQuiz}

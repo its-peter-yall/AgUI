@@ -144,6 +144,12 @@ export function CourseSourcesPanel({
             </p>
           )}
 
+          {report?.summary && (
+            <p className="text-sm text-foreground/90 whitespace-pre-wrap">
+              {report.summary}
+            </p>
+          )}
+
           {report && isDegraded && (
             <div
               role="alert"
@@ -163,12 +169,22 @@ export function CourseSourcesPanel({
                   ))}
                 </ul>
               )}
-              {report.warnings.map((w) => (
-                <p key={`${w.code}-${w.message}`} className="mt-1 text-xs">
-                  {w.message}
-                </p>
-              ))}
             </div>
+          )}
+
+          {/* N3: warnings independent of degraded block */}
+          {report && report.warnings.length > 0 && (
+            <ul className="space-y-1">
+              {report.warnings.map((w) => (
+                <li
+                  key={`${w.code}-${w.message}`}
+                  className="text-xs text-amber-700 dark:text-amber-300 flex items-start gap-1.5"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  {w.message}
+                </li>
+              ))}
+            </ul>
           )}
 
           {report?.freshness_note && (

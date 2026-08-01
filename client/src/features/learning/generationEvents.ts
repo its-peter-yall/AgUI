@@ -58,6 +58,28 @@ export const reconcileGenerationSession = (
   ) {
     return current;
   }
+  // M9: equal event IDs — prefer newer updated_at so stale poll cannot undo resume.
+  if (
+    incoming.generation.last_event_id ===
+    current.generation.last_event_id
+  ) {
+    const incomingTs = Date.parse(incoming.generation.updated_at ?? '');
+    const currentTs = Date.parse(current.generation.updated_at ?? '');
+    if (
+      !Number.isNaN(incomingTs) &&
+      !Number.isNaN(currentTs) &&
+      incomingTs < currentTs
+    ) {
+      return current;
+    }
+    // Prefer non-terminal over terminal when timestamps equal/unknown.
+    if (
+      isTerminalGenerationStage(incoming.generation.stage) &&
+      !isTerminalGenerationStage(current.generation.stage)
+    ) {
+      return current;
+    }
+  }
   return incoming;
 };
 
