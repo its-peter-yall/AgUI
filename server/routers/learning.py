@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 from server.agents.planner import OutlineTopicCountError
 from server.database.learning_persistence import learning_manager
 from server.graph.build import get_graph
+from server.schemas.search import SearchContext
 from server.graph.regen import regenerate_failed_node, regenerate_topic_node
 from server.schemas.learning import (
     ConceptChatRequest,

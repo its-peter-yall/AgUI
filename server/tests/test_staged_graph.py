@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from server.graph.build import build_graph
 from server.graph.nodes import fan_out_generators, select_topic_batch
 from server.schemas.generation import GenerationStage
+from server.schemas.learning import CourseOutline, TopicNode
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 
