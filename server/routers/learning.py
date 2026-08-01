@@ -88,6 +88,7 @@ from server.services.quiz_randomization import (
     hide_quiz_card,
     shuffle_quiz_set_with_seed,
 )
+from server.services.session_event_stream import stream_session_events
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +581,71 @@ def get_learning_session(session_id: str) -> LearningSessionWithNodes:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",
         )
+
+
+def _parse_event_cursor(
+    after: Optional[int],
+    last_event_id: Optional[str],
+) -> int:
+    """Resolve SSE cursor from query and Last-Event-ID header."""
+    after_val = 0 if after is None else after
+    if after_val < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="after must be a non-negative integer",
+        )
+    header_val = 0
+    if last_event_id is not None and str(last_event_id).strip() != "":
+        try:
+            header_val = int(str(last_event_id).strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Last-Event-ID must be a non-negative integer",
+            ) from exc
+        if header_val < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Last-Event-ID must be a non-negative integer",
+            )
+    return max(after_val, header_val)
+
+
+@router.get(
+    "/sessions/{session_id}/events",
+    summary="Stream generation progress events",
+    description=(
+        "Replay durable progress events after a cursor, then tail new events "
+        "as Server-Sent Events. Disconnect does not cancel generation."
+    ),
+)
+async def stream_learning_session_events(
+    session_id: str,
+    after: Optional[int] = Query(default=None, description="Exclusive event id cursor"),
+    last_event_id: Optional[str] = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    """Replay-then-tail SSE for a learning session."""
+    session = learning_manager.get_learning_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Learning session not found: {session_id}",
+        )
+    cursor = _parse_event_cursor(after, last_event_id)
+    generator = stream_session_events(
+        session_id=session_id,
+        cursor=cursor,
+        event_store=progress_event_store,
+        job_store=generation_job_store,
+    )
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(
