@@ -35,7 +35,6 @@ from server.agents.planner import OutlineTopicCountError
 from server.routers.learning import (
     GenerateCourseRequest,
     QuizSubmitRequest,
-    _generate_course_with_graph,
     router,
     submit_quiz,
 )
@@ -87,55 +86,80 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
+def _accepted_payload() -> dict[str, object]:
+    return {
+        "session": {
+            "id": "session-1",
+            "user_id": None,
+            "query": "test query",
+            "course_title": "Test Course",
+            "title_finalized": False,
+            "mode": "auto",
+            "resolved_mode": None,
+            "total_nodes": 0,
+            "completed_nodes": 0,
+            "last_active_node_id": None,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "nodes": [],
+        },
+        "generation": {
+            "id": "job-1",
+            "session_id": "session-1",
+            "stage": "INITIALIZING",
+            "web_search_requested": False,
+            "grounding_status": "DISABLED",
+            "counts": {
+                "topics_total": 0,
+                "briefs_ready": 0,
+                "topics_ready": 0,
+                "topics_failed": 0,
+                "research_sections": 0,
+                "sources": 0,
+            },
+            "warnings": [],
+            "cancel_requested": False,
+            "can_cancel": True,
+            "can_resume": False,
+            "last_event_id": 1,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+    }
+
+
+def _client_with_runtime(runtime=None) -> TestClient:
+    app = FastAPI()
+    app.state.generation_runtime = runtime or SimpleNamespace(
+        start=AsyncMock(return_value=_accepted_payload()),
+    )
+    app.include_router(router)
+    app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+        api_key="test-key",
+        model="test/model",
+    )
+    return TestClient(app)
+
+
 class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
     """Tests for graph-only router behavior."""
 
-    @patch("server.routers.learning.learning_manager.get_session_nodes")
-    @patch("server.routers.learning.learning_manager.get_learning_session")
-    @patch("server.routers.learning.run_generation_job", new_callable=AsyncMock)
-    @patch("server.routers.learning.generation_job_store.create_session_shell_and_job")
-    def test_generate_always_uses_graph(
-        self,
-        mock_shell: MagicMock,
-        mock_run: AsyncMock,
-        mock_get_session: MagicMock,
-        mock_get_nodes: MagicMock,
-    ) -> None:
-        res = _result()
-        mock_shell.return_value = (res["session"], SimpleNamespace(id="job-1"))
-        mock_get_session.return_value = res["session"]
-        mock_get_nodes.return_value = res["nodes"]
-        client = _client()
+    def test_generate_returns_202_via_runtime(self) -> None:
+        runtime = SimpleNamespace(start=AsyncMock(return_value=_accepted_payload()))
+        client = _client_with_runtime(runtime)
 
         response = client.post(
             "/learning/generate",
             json={"query": "test query"},
         )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["id"], "session-1")
-        self.assertEqual(
-            response.json()["nodes"][0]["status"],
-            "VIEWING_EXPLANATION",
-        )
-        mock_run.assert_awaited_once()
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["session"]["id"], "session-1")
+        self.assertEqual(response.json()["generation"]["stage"], "INITIALIZING")
+        runtime.start.assert_awaited_once()
 
-    @patch("server.routers.learning.learning_manager.get_session_nodes")
-    @patch("server.routers.learning.learning_manager.get_learning_session")
-    @patch("server.routers.learning.run_generation_job", new_callable=AsyncMock)
-    @patch("server.routers.learning.generation_job_store.create_session_shell_and_job")
-    def test_generate_response_shape(
-        self,
-        mock_shell: MagicMock,
-        mock_run: AsyncMock,
-        mock_get_session: MagicMock,
-        mock_get_nodes: MagicMock,
-    ) -> None:
-        res = _result()
-        mock_shell.return_value = (res["session"], SimpleNamespace(id="job-1"))
-        mock_get_session.return_value = res["session"]
-        mock_get_nodes.return_value = res["nodes"]
-        client = _client()
+    def test_generate_response_shape(self) -> None:
+        client = _client_with_runtime()
 
         response = client.post(
             "/learning/generate",
@@ -143,15 +167,16 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         body = response.json()
-        self.assertIn("id", body)
-        self.assertIn("nodes", body)
-        self.assertIn("query", body)
-        self.assertIn("course_title", body)
-        self.assertIsInstance(body["nodes"], list)
-        self.assertGreater(len(body["nodes"]), 0)
+        self.assertIn("session", body)
+        self.assertIn("generation", body)
+        self.assertIn("id", body["session"])
+        self.assertIn("query", body["session"])
+        self.assertIn("course_title", body["session"])
+        self.assertEqual(body["session"]["nodes"], [])
 
     def test_generate_invalid_mode_returns_422(self) -> None:
-        client = _client()
+        runtime = SimpleNamespace(start=AsyncMock())
+        client = _client_with_runtime(runtime)
 
         response = client.post(
             "/learning/generate",
@@ -159,6 +184,7 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 422)
+        runtime.start.assert_not_awaited()
 
     @patch("server.routers.learning.learning_manager.get_concept_node")
     @patch("server.routers.learning.regenerate_failed_node")
@@ -279,68 +305,12 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         mock_regen.assert_not_awaited()
 
 class StagedCompatibilityRouterTests(unittest.IsolatedAsyncioTestCase):
-    """Tests temporary Phase 4 HTTP wrapper over complete staged graph."""
+    """Tests Phase 5 detached generation replaces Phase 4 blocking wrapper."""
 
-    async def test_disconnect_check_never_cancels_or_deletes_session(self) -> None:
-        class RequestStub:
-            def __init__(self) -> None:
-                self.app = SimpleNamespace(state=SimpleNamespace())
-                self.disconnect_checks = 0
-
-            async def is_disconnected(self) -> bool:
-                self.disconnect_checks += 1
-                return True
-
-        request = RequestStub()
-        completed = {
-            "id": "session-1",
-            "user_id": None,
-            "query": "test query",
-            "course_title": "Test Course",
-            "mode": "lite",
-            "resolved_mode": "lite",
-            "created_at": "2026-08-01T00:00:00+00:00",
-            "updated_at": "2026-08-01T00:00:00+00:00",
-            "total_nodes": 3,
-            "completed_nodes": 0,
-            "last_active_node_id": None,
-        }
-        with (
-            patch(
-                "server.database.generation_jobs.generation_job_store"
-                ".create_session_shell_and_job",
-                return_value=(completed, SimpleNamespace(id="job-1")),
-            ),
-            patch(
-                "server.graph.runner.run_generation_job",
-                new=AsyncMock(),
-            ) as run,
-            patch(
-                "server.routers.learning.learning_manager"
-                ".get_learning_session",
-                return_value=completed,
-            ),
-            patch(
-                "server.routers.learning.learning_manager.get_session_nodes",
-                return_value=[],
-            ),
-            patch(
-                "server.routers.learning.learning_manager"
-                ".delete_learning_session"
-            ) as delete,
-        ):
-            await _generate_course_with_graph(
-                GenerateCourseRequest(query="test query", mode="lite"),
-                request,  # type: ignore[arg-type]
-                LLMContext(api_key="llm-key", model="test/model"),
-            )
-        run.assert_awaited_once()
-        delete.assert_not_called()
-        self.assertEqual(request.disconnect_checks, 0)
-
-    def test_old_background_helpers_are_removed(self) -> None:
+    def test_blocking_wrapper_and_background_helpers_are_removed(self) -> None:
         from server.routers import learning
 
+        self.assertFalse(hasattr(learning, "_generate_course_with_graph"))
         self.assertFalse(hasattr(learning, "_generate_single_node_bg"))
         self.assertFalse(hasattr(learning, "_generate_remaining_nodes_bg"))
 

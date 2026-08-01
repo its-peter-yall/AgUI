@@ -45,6 +45,7 @@ from server.database.sqlite_utils import (
 from server.schemas.generation import (
     GenerationCounts,
     GenerationCursor,
+    GenerationJobPublic,
     GenerationJobRecord,
     GenerationLock,
     GenerationStage,
@@ -276,6 +277,54 @@ class GenerationJobStore:
         if row is None:
             return None
         return _row_to_record(row)
+
+    def to_public(
+        self,
+        job: GenerationJobRecord,
+        *,
+        last_event_id: Optional[int] = None,
+    ) -> GenerationJobPublic:
+        """Project a job record to the public API shape."""
+        event_id = last_event_id
+        if event_id is None:
+            try:
+                from server.database.progress_events import progress_event_store
+
+                event_id = progress_event_store.latest_id(job.session_id)
+            except Exception:
+                event_id = 0
+        return GenerationJobPublic.from_job(job, last_event_id=event_id or 0)
+
+    def to_public_by_session(
+        self, session_id: str
+    ) -> Optional[GenerationJobPublic]:
+        """Load job by session and return public projection, or None."""
+        job = self.get_by_session(session_id)
+        if job is None:
+            return None
+        return self.to_public(job)
+
+    def get_public_by_sessions(
+        self, session_ids: list[str]
+    ) -> dict[str, GenerationJobPublic]:
+        """Bulk public job projection keyed by session_id."""
+        if not session_ids:
+            return {}
+        unique_ids = list(dict.fromkeys(session_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        with optional_transaction(self.db_path, None) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {JOB_ROW_COLUMNS} FROM generation_jobs
+                WHERE session_id IN ({placeholders})
+                """,
+                tuple(unique_ids),
+            ).fetchall()
+        result: dict[str, GenerationJobPublic] = {}
+        for row in rows:
+            job = _row_to_record(row)
+            result[job.session_id] = self.to_public(job)
+        return result
 
     def _load_stage(
         self, conn: sqlite3.Connection, session_id: str

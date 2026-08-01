@@ -288,10 +288,10 @@ class GenerationJobPublic(BaseModel):
 class GenerateCourseAcceptedResponse(BaseModel):
     """Immediate 202 acceptance payload for detached course generation."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
     session: dict
-    generation: GenerationJobPublic
+    generation: dict | GenerationJobPublic
 
 
 class GenerationControlResponse(BaseModel):

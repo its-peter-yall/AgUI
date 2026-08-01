@@ -37,20 +37,30 @@ from typing import List, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, status, Depends, Request, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from server.agents.planner import OutlineTopicCountError
+from server.database.generation_jobs import generation_job_store
 from server.database.learning_persistence import learning_manager
+from server.database.progress_events import progress_event_store
+from server.database.research_store import research_store
 from server.graph.build import get_graph
-from server.schemas.search import SearchContext
+from server.schemas.search import SearchContext, get_search_context
 from server.graph.regen import regenerate_failed_node, regenerate_topic_node
+from server.schemas.generation import (
+    GenerateCourseAcceptedResponse,
+    GenerationControlResponse,
+    GenerationJobPublic,
+)
 from server.schemas.learning import (
     ConceptChatRequest,
     ConceptNodeResponse,
     LearningSessionResponse,
     LearningSessionSummary,
+    ModuleGenerationStatus,
     NodeStatus,
+    PublicNodeCitation,
     QuizAttemptHistory,
     QuizAttemptResponse,
     QuizSetHidden,
@@ -70,6 +80,7 @@ from server.schemas.learning import (
 from server.agents.generator import generator_agent
 from server.agents.quizzer import quizzer_agent
 from server.schemas.llm import LLMContext, get_llm_context
+from server.schemas.research import ResearchReport
 from server.services.concept_chat import stream_concept_chat
 from server.services.depth_router import resolve_depth_mode
 from server.services.quiz_randomization import (
@@ -98,7 +109,12 @@ QUIZ_VISIBLE_STATES = {
 class GenerateCourseRequest(BaseModel):
     """Request schema for generating a learning course."""
 
-    query: str = Field(..., description="Topic to learn about", min_length=1)
+    query: str = Field(
+        ...,
+        description="Topic to learn about",
+        min_length=1,
+        max_length=500,
+    )
     user_id: Optional[str] = Field(default=None, description="Optional user ID")
     mode: Literal["auto", "lite", "full"] = Field(
         default="auto",
@@ -112,6 +128,10 @@ class LearningSessionWithNodes(LearningSessionResponse):
     nodes: List[ConceptNodeResponse] = Field(
         default_factory=list,
         description="All concept nodes in sequence order",
+    )
+    generation: Optional[GenerationJobPublic] = Field(
+        default=None,
+        description="Progressive generation job snapshot when present",
     )
 
 
@@ -291,93 +311,44 @@ def _ensure_quiz_shuffle_seed(node_id: str) -> Optional[str]:
     return shuffle_seed
 
 
-async def _generate_course_with_graph(
-    request_body: GenerateCourseRequest,
-    request: Request,
-    llm_context: LLMContext,
-) -> dict:
-    """Generate a learning course using LangGraph via durable runner."""
-    search_context = SearchContext()
-    session, job = generation_job_store.create_session_shell_and_job(
-        session_id=None,
-        user_id=request_body.user_id,
-        query=request_body.query,
-        mode=request_body.mode,
-        web_search_requested=search_context.enabled,
-    )
-    session_id = session["id"]
-
-    run_task = asyncio.create_task(
-        run_generation_job(
-            app_state=request.app.state,
-            session_id=session_id,
-            llm_context=llm_context,
-            search_context=search_context,
-            resume=False,
-        )
-    )
-
-    await asyncio.shield(run_task)
-
-    session_record = learning_manager.get_learning_session(session_id)
-    nodes_data = learning_manager.get_session_nodes(session_id)
-    return {
-        "session": session_record,
-        "nodes": nodes_data,
-    }
-
-
 @router.post(
     "/generate",
-    response_model=LearningSessionWithNodes,
-    status_code=status.HTTP_201_CREATED,
+    response_model=GenerateCourseAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Generate a learning course",
-    description="Generate a structured learning course from a topic query.",
+    description=(
+        "Create a durable session shell and start detached progressive "
+        "course generation. Returns immediately with 202."
+    ),
 )
 async def generate_course(
     request_body: GenerateCourseRequest,
     request: Request,
     llm_context: LLMContext = Depends(get_llm_context),
-) -> LearningSessionWithNodes:
-    """Generate a learning course using LangGraph."""
+    search_context: SearchContext = Depends(get_search_context),
+) -> JSONResponse:
+    """Accept generation and return shell + public job immediately."""
     try:
-        result = await _generate_course_with_graph(
+        runtime = getattr(request.app.state, "generation_runtime", None)
+        if runtime is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Generation runtime unavailable",
+            )
+        accepted = await runtime.start(
             request_body=request_body,
-            request=request,
             llm_context=llm_context,
+            search_context=search_context,
         )
-
-        session = result.get("session", {})
-        session_id = session.get("id")
-
-        nodes_data = learning_manager.get_session_nodes(session_id)
-        nodes = [
-            ConceptNodeResponse(**_apply_node_visibility(node)) for node in nodes_data
-        ]
-
-        return LearningSessionWithNodes(**session, nodes=nodes)
-    except HTTPException:
-        raise
-    except OutlineTopicCountError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(e),
-        )
-    except Exception as e:
-        logger.error(f"Error generating course: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
+        # JSONResponse preserves store ISO timestamps (no Z re-normalization).
+        return JSONResponse(
+            content=accepted,
+            status_code=status.HTTP_202_ACCEPTED,
         )
     except HTTPException:
         raise
-    except OutlineTopicCountError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(e),
-        )
-    except Exception as e:
-        logger.error(f"Error generating course: {e}")
+    except Exception:
+        logger.exception("Error accepting course generation")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error",

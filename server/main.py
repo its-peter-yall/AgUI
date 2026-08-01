@@ -39,6 +39,7 @@ from server.database import generation_job_store, initialize_generation_schema
 from server.database.learning_persistence import learning_manager
 from server.graph.build import CHECKPOINT_DB_PATH, build_graph
 from server.routers import learning_router, llm_router
+from server.services.generation_runtime import GenerationRuntime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +72,12 @@ async def lifespan(app: FastAPI):
         app.state.course_graph = build_graph(
             checkpointer=checkpointer,
         )
-        yield
+        runtime = GenerationRuntime(app_state=app.state)
+        app.state.generation_runtime = runtime
+        try:
+            yield
+        finally:
+            await runtime.shutdown()
 
     logger.info("Shutting down A2UI Backend...")
 
