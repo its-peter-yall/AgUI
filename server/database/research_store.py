@@ -715,5 +715,61 @@ class ResearchStore:
             ).fetchall()
         return [self._source_from_row(row) for row in rows]
 
+    def get_citations_by_session(
+        self, session_id: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Bulk public citations keyed by node_id (no canonical/hash fields)."""
+        with optional_transaction(self.db_path, None) as conn:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        ns.node_id AS node_id,
+                        ns.source_id AS source_id,
+                        ns.citation_order AS citation_order,
+                        ns.claim AS claim,
+                        rs.title AS title,
+                        rs.url AS url,
+                        rs.publisher AS publisher,
+                        rs.published_at AS published_at,
+                        rs.retrieved_at AS retrieved_at
+                    FROM node_sources ns
+                    JOIN concept_nodes cn ON ns.node_id = cn.id
+                    JOIN research_sources rs
+                        ON rs.id = ns.source_id AND rs.session_id = ?
+                    WHERE cn.learning_session_id = ?
+                    ORDER BY ns.node_id ASC, ns.citation_order ASC
+                    """,
+                    (session_id, session_id),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            node_id = row["node_id"]
+            order = int(row["citation_order"])
+            grouped.setdefault(node_id, []).append(
+                {
+                    "source_id": row["source_id"],
+                    "citation_number": order if order > 0 else len(
+                        grouped.get(node_id, [])
+                    )
+                    + 1,
+                    "title": row["title"],
+                    "url": row["url"],
+                    "publisher": row["publisher"],
+                    "published_at": row["published_at"],
+                    "retrieved_at": row["retrieved_at"],
+                    "claim": row["claim"],
+                }
+            )
+        return grouped
+
+    def get_public_report(
+        self, session_id: str
+    ) -> Optional[ResearchReport]:
+        """Return the public research report projection for a session."""
+        return self.get_report(session_id)
+
 
 research_store = ResearchStore()

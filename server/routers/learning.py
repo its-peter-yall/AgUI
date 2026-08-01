@@ -403,9 +403,17 @@ def get_learning_sessions(
             offset=offset,
         )
         has_more = total_count > (offset + safe_limit)
-        typed_sessions = [
-            LearningSessionSummary.model_validate(s) for s in sessions
-        ]
+        job_map = generation_job_store.get_public_by_sessions(
+            [s["id"] for s in sessions if s.get("id")]
+        )
+        typed_sessions: list[LearningSessionSummary] = []
+        for s in sessions:
+            row = dict(s)
+            public_job = job_map.get(s["id"])
+            if public_job is not None:
+                row["generation_stage"] = public_job.stage.value
+                row["grounding_status"] = public_job.grounding_status.value
+            typed_sessions.append(LearningSessionSummary.model_validate(row))
         return SessionListResponse(
             sessions=typed_sessions,
             total_count=total_count,
@@ -476,6 +484,51 @@ def update_last_active(
         )
 
 
+def _map_module_status(raw: object) -> ModuleGenerationStatus:
+    """Map DB generation_status to public module_status."""
+    if raw is None:
+        return ModuleGenerationStatus.READY
+    try:
+        return ModuleGenerationStatus(str(raw))
+    except ValueError:
+        return ModuleGenerationStatus.READY
+
+
+def _project_session_node(
+    node: dict,
+    citations_by_node: dict[str, list],
+) -> ConceptNodeResponse:
+    """Apply visibility, progressive blanking, module status, and citations."""
+    module_status = _map_module_status(node.get("generation_status"))
+    working = dict(node)
+    if module_status in {
+        ModuleGenerationStatus.SKELETON,
+        ModuleGenerationStatus.GENERATING,
+    }:
+        working["content_markdown"] = ""
+        working["quiz"] = None
+        visible = _apply_node_visibility(working)
+        visible["content_markdown"] = ""
+        visible["quiz"] = None
+        visible["quiz_set"] = None
+        visible["quiz_hidden"] = None
+        visible["quiz_set_hidden"] = None
+        visible["total_quizzes"] = None
+    else:
+        visible = _apply_node_visibility(working)
+
+    visible["module_status"] = module_status
+    raw_citations = citations_by_node.get(node["id"], [])
+    citations: list[PublicNodeCitation] = []
+    for item in raw_citations:
+        if isinstance(item, PublicNodeCitation):
+            citations.append(item)
+        elif isinstance(item, dict):
+            citations.append(PublicNodeCitation.model_validate(item))
+    visible["citations"] = citations
+    return ConceptNodeResponse(**visible)
+
+
 @router.get(
     "/sessions/{session_id}",
     response_model=LearningSessionWithNodes,
@@ -493,11 +546,32 @@ def get_learning_session(session_id: str) -> LearningSessionWithNodes:
             )
 
         nodes_data = learning_manager.get_session_nodes(session_id)
+        generation = generation_job_store.to_public_by_session(session_id)
+        try:
+            citations_by_node = research_store.get_citations_by_session(session_id)
+        except Exception:
+            citations_by_node = {}
+
         nodes = [
-            ConceptNodeResponse(**_apply_node_visibility(node)) for node in nodes_data
+            _project_session_node(node, citations_by_node) for node in nodes_data
         ]
 
-        return LearningSessionWithNodes(**session, nodes=nodes)
+        title_finalized = session.get("title_finalized", True)
+        if isinstance(title_finalized, int):
+            title_finalized = bool(title_finalized)
+        if generation is None and "title_finalized" not in session:
+            title_finalized = True
+
+        payload = dict(session)
+        payload["title_finalized"] = title_finalized
+        if isinstance(generation, GenerationJobPublic):
+            payload["generation"] = generation
+        elif isinstance(generation, dict):
+            payload["generation"] = GenerationJobPublic.model_validate(generation)
+        else:
+            payload["generation"] = None
+
+        return LearningSessionWithNodes(**payload, nodes=nodes)
     except HTTPException:
         raise
     except Exception as e:
