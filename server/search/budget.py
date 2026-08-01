@@ -28,9 +28,10 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-from typing import Callable, Literal, Optional
+from typing import TYPE_CHECKING, Callable, Literal, Optional
 
-from server.schemas.generation import ResearchCursor
+if TYPE_CHECKING:
+    from server.schemas.generation import ResearchCursor
 
 ResearchMode = Literal["lite", "full"]
 
@@ -277,8 +278,10 @@ class ResearchBudgetLedger:
         next_section_index: int = 0,
         pending_queries: Optional[list[str]] = None,
         completed_themes: Optional[list[str]] = None,
-    ) -> ResearchCursor:
+    ) -> "ResearchCursor":
         """Map durable counters into Phase 1 ResearchCursor fields."""
+        from server.schemas.generation import ResearchCursor
+
         return ResearchCursor(
             iteration=iteration,
             next_section_index=next_section_index,
@@ -295,7 +298,7 @@ class ResearchBudgetLedger:
     def from_cursor(
         cls,
         budget: ResearchBudget,
-        cursor: ResearchCursor,
+        cursor: "ResearchCursor",
         *,
         clock: Optional[Clock] = None,
         sources: int = 0,

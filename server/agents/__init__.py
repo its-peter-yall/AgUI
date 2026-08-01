@@ -32,6 +32,7 @@ from server.agents.base import BaseAgent
 from server.agents.generator import GeneratedContent, GeneratorAgent, generator_agent
 from server.agents.planner import PlannerAgent, planner_agent
 from server.agents.quizzer import QuizzerAgent, quizzer_agent
+from server.agents.researcher import ResearcherAgent, researcher_agent
 
 __all__ = [
     "BaseAgent",
@@ -42,4 +43,6 @@ __all__ = [
     "planner_agent",
     "QuizzerAgent",
     "quizzer_agent",
+    "ResearcherAgent",
+    "researcher_agent",
 ]

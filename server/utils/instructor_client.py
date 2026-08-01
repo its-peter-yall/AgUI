@@ -106,6 +106,10 @@ MODEL_CONFIGS = {
         "temperature": 0.0,
         "max_tokens": 256,
     },
+    "researcher": {
+        "temperature": 0.1,
+        "max_tokens": 12000,
+    },
 }
 
 
