@@ -92,6 +92,7 @@ class BaseAgent(ABC):
         user_message: str,
         context: Optional[dict[str, Any]] = None,
         llm_context: Optional[LLMContext] = None,
+        system_prompt_override: Optional[str] = None,
         **kwargs: Any,
     ) -> T:
         """Generate a structured response using the agent's role configuration.
@@ -104,6 +105,7 @@ class BaseAgent(ABC):
             user_message: The user's input message/query
             context: Optional dict of context data for prompt augmentation
             llm_context: Optional OpenRouter context
+            system_prompt_override: Optional explicit system prompt override
             **kwargs: Additional arguments passed to the instructor client
 
         Returns:
@@ -117,7 +119,9 @@ class BaseAgent(ABC):
             provider_name = llm_context.provider.value.title() if llm_context else "AI"
             raise ValueError(f"{provider_name} API key is required in llm_context.")
 
-        full_system_prompt = self._build_system_prompt(context)
+        full_system_prompt = self._build_system_prompt(
+            context, system_prompt_override=system_prompt_override
+        )
         messages = [{"role": "user", "content": user_message}]
 
         api_key = llm_context.api_key
@@ -141,20 +145,29 @@ class BaseAgent(ABC):
         logger.info(f"{self.__class__.__name__} generated structured response")
         return response
 
-    def _build_system_prompt(self, context: Optional[dict[str, Any]] = None) -> str:
+    def _build_system_prompt(
+        self,
+        context: Optional[dict[str, Any]] = None,
+        system_prompt_override: Optional[str] = None,
+    ) -> str:
         """
         Build the full system prompt with optional context injection.
 
-        Combines the base system prompt from the subclass with formatted
-        context data when provided.
+        Combines the base system prompt from the subclass (or override) with
+        formatted context data when provided.
 
         Args:
             context: Optional dict of context data to inject
+            system_prompt_override: Optional system prompt string override
 
         Returns:
             Complete system prompt string
         """
-        base_prompt = self.system_prompt
+        base_prompt = (
+            system_prompt_override
+            if system_prompt_override is not None
+            else self.system_prompt
+        )
 
         if context:
             context_str = self._format_context(context)
