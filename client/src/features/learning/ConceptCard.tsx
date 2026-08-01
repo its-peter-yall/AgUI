@@ -51,7 +51,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronLeft, RefreshCw, List } from "lucide-react";
+import { ChevronLeft, RefreshCw, List, BookOpen } from "lucide-react";
 import type {
 	ConceptNode,
 	NodeStatus,
@@ -67,6 +67,7 @@ import { useQuizFeedback } from "./useQuizFeedback";
 import { ErrorState, LoadingState } from "./ErrorStates";
 import { parseCuriosityQuestions } from "./curiosityParser";
 import { CuriositySpark } from "./CuriositySpark";
+import { SourceCitations } from "./SourceCitations";
 import {
 	AnimatedCard,
 	ContentTransition,
@@ -94,6 +95,7 @@ interface ConceptCardProps {
 	onToggleHeadingChat?: (headingId: string) => void;
 	onAskQuestion?: (question: string) => void;
 	onOpenTOC?: () => void;
+	onViewSources?: () => void;
 }
 
 const SkeletonLoader = () => (
@@ -146,6 +148,7 @@ export function ConceptCard({
 	onToggleHeadingChat,
 	onAskQuestion,
 	onOpenTOC,
+	onViewSources,
 }: ConceptCardProps) {
 	const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set());
 	const [showRegenConfirm, setShowRegenConfirm] = useState(false);
@@ -526,6 +529,17 @@ export function ConceptCard({
 											onAskQuestion={onAskQuestion}
 										/>
 									)}
+									<SourceCitations citations={node.citations ?? []} />
+									{onViewSources && (
+										<button
+											type="button"
+											onClick={onViewSources}
+											className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+										>
+											<BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+											View course sources
+										</button>
+									)}
 									<div className="flex justify-between items-center pt-4 border-t">
 										{renderPreviousButton()}
 										<button
@@ -779,6 +793,20 @@ export function ConceptCard({
 										<p className="text-xs text-muted-foreground">
 											{node.error_message}
 										</p>
+									)}
+									{node.content_markdown && (
+										<MarkdownRenderer content={node.content_markdown} />
+									)}
+									<SourceCitations citations={node.citations ?? []} />
+									{onViewSources && (
+										<button
+											type="button"
+											onClick={onViewSources}
+											className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+										>
+											<BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+											View course sources
+										</button>
 									)}
 									<div className="flex gap-3">
 										<button
