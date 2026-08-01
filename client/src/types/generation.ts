@@ -174,5 +174,40 @@ export interface GenerationEvent {
   session_id: string;
   event_type: ProgressEventType;
   payload: GenerationEventPayload;
+  generation?: GenerationJobPublic | null;
   created_at: string;
+}
+
+export interface GenerationJobPublic {
+  id: string;
+  session_id: string;
+  stage: GenerationStage;
+  web_search_requested: boolean;
+  grounding_status: GroundingStatus;
+  counts: GenerationCounts;
+  warnings: GenerationWarning[];
+  cancel_requested: boolean;
+  can_cancel: boolean;
+  can_resume: boolean;
+  last_event_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GenerateCourseAcceptedResponse {
+  session: {
+    id: string;
+    query: string;
+    course_title: string;
+    title_finalized?: boolean;
+    total_nodes?: number;
+    completed_nodes?: number;
+    nodes?: unknown[];
+    [key: string]: unknown;
+  };
+  generation: GenerationJobPublic;
+}
+
+export interface GenerationControlResponse {
+  generation: GenerationJobPublic;
 }

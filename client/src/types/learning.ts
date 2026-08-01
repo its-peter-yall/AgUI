@@ -45,12 +45,30 @@
 // learning.ts
 // TypeScript interfaces for retrieval-based learning features
 
+import type {
+	GenerationJobPublic,
+	GenerateCourseAcceptedResponse,
+	GenerationControlResponse,
+} from '@/types/generation';
+
+export type {
+	GenerationJobPublic,
+	GenerateCourseAcceptedResponse,
+	GenerationControlResponse,
+};
+
 export type NodeStatus =
 	| "LOCKED"
 	| "VIEWING_EXPLANATION"
 	| "IN_QUIZ"
 	| "SHOWING_FEEDBACK"
 	| "COMPLETED"
+	| "ERROR";
+
+export type ModuleGenerationStatus =
+	| "SKELETON"
+	| "GENERATING"
+	| "READY"
 	| "ERROR";
 
 export type QuizDifficulty = "easy" | "medium" | "hard";
@@ -60,6 +78,18 @@ export type Complexity = "Basic" | "Intermediate" | "Advanced";
 export type LearningDepthMode = "auto" | "lite" | "full";
 
 export type ResolvedDepthMode = "lite" | "full";
+
+/** Validated public citation metadata attached to a concept node. */
+export interface NodeCitation {
+	source_id: string;
+	citation_number: number;
+	title: string;
+	url: string;
+	publisher: string | null;
+	published_at: string | null;
+	retrieved_at: string | null;
+	claim?: string | null;
+}
 
 export interface QuizOption {
 	option_id: string;
@@ -112,6 +142,8 @@ export interface ConceptNode {
 	retry_available: boolean;
 	complexity?: Complexity;
 	total_quizzes?: number | null;
+	module_status?: ModuleGenerationStatus;
+	citations?: NodeCitation[];
 	quiz: QuizCard | null;
 	quiz_set: QuizSet | null;
 	quiz_hidden: QuizCardHidden | null;
@@ -147,12 +179,14 @@ export interface LearningSession {
 	last_active_node_id: string | null;
 	mode?: LearningDepthMode | null;
 	resolved_mode?: ResolvedDepthMode | null;
+	title_finalized?: boolean;
 	created_at: string;
 	updated_at: string | null;
 }
 
 export interface LearningSessionWithNodes extends LearningSession {
 	nodes: ConceptNode[];
+	generation?: GenerationJobPublic | null;
 }
 
 export interface QuizAttempt {
@@ -224,6 +258,8 @@ export interface LearningSessionSummary {
 	updated_at: string;
 	completed_at: string | null;
 	revision_count: number;
+	generation?: GenerationJobPublic | null;
+	title_finalized?: boolean;
 }
 
 export interface SessionListResponse {
