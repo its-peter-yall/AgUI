@@ -54,4 +54,72 @@ describe('SourceCitations', () => {
     const { container } = render(<SourceCitations citations={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('filters unsafe and incomplete citations', () => {
+    const { container } = render(
+      <SourceCitations
+        citations={[
+          {
+            source_id: 'bad-1',
+            citation_number: 1,
+            title: 'Javascript protocol',
+            url: 'javascript:alert(1)',
+            publisher: null,
+            published_at: null,
+            retrieved_at: null,
+          },
+          {
+            source_id: 'bad-2',
+            citation_number: 2,
+            title: '',
+            url: 'https://example.com',
+            publisher: null,
+            published_at: null,
+            retrieved_at: null,
+          },
+          {
+            source_id: 'bad-3',
+            citation_number: 3,
+            title: 'Not a url',
+            url: 'not-a-url',
+            publisher: null,
+            published_at: null,
+            retrieved_at: null,
+          },
+        ]}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('sorts by citation number and omits missing publisher', () => {
+    render(
+      <SourceCitations
+        citations={[
+          {
+            source_id: 's2',
+            citation_number: 2,
+            title: 'Second',
+            url: 'http://example.com/2',
+            publisher: null,
+            published_at: null,
+            retrieved_at: null,
+          },
+          {
+            source_id: 's1',
+            citation_number: 1,
+            title: 'First',
+            url: 'https://example.com/1',
+            publisher: null,
+            published_at: null,
+            retrieved_at: null,
+          },
+        ]}
+      />,
+    );
+    const links = screen.getAllByRole('link');
+    expect(links[0]).toHaveTextContent('1. First');
+    expect(links[1]).toHaveTextContent('2. Second');
+    expect(links[0].textContent).not.toContain('—');
+  });
 });

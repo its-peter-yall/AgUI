@@ -96,7 +96,11 @@ class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
                 "advance_batch_node": advance,
             }
         )
-        with patch("server.graph.nodes.generation_artifact_store", artifacts):
+        with (
+            patch("server.graph.nodes.generation_artifact_store", artifacts),
+            patch("server.graph.nodes.generation_job_store", jobs),
+            patch("server.graph.nodes.progress_event_store", MagicMock()),
+        ):
             result = await graph.ainvoke(
                 {
                     "job_id": "job-1",
@@ -158,9 +162,24 @@ class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
             return CourseOutline(
                 course_title="Test Course",
                 topics=[
-                    TopicNode(index=0, title="T0", summary_for_context="S0"),
-                    TopicNode(index=1, title="T1", summary_for_context="S1"),
-                    TopicNode(index=2, title="T2", summary_for_context="S2"),
+                    TopicNode(
+                        index=0,
+                        title="T0",
+                        summary_for_context="S0",
+                        key_terms=["t0a", "t0b"],
+                    ),
+                    TopicNode(
+                        index=1,
+                        title="T1",
+                        summary_for_context="S1",
+                        key_terms=["t1a", "t1b"],
+                    ),
+                    TopicNode(
+                        index=2,
+                        title="T2",
+                        summary_for_context="S2",
+                        key_terms=["t2a", "t2b"],
+                    ),
                 ],
             )
 
@@ -173,9 +192,18 @@ class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
                 "finalize_generation_node": AsyncMock(return_value={}),
             }
         )
+        jobs = MagicMock()
+        jobs.is_cancel_requested.return_value = False
+        jobs.get_by_session.return_value = None
+        artifacts = MagicMock()
+        events = MagicMock()
         with (
             patch("server.graph.nodes.run_research", new=AsyncMock(side_effect=fake_research)),
             patch("server.graph.nodes.planner_agent.plan", new=AsyncMock(side_effect=fake_plan)),
+            patch("server.graph.nodes.generation_job_store", jobs),
+            patch("server.graph.nodes.generation_artifact_store", artifacts),
+            patch("server.graph.nodes.progress_event_store", events),
+            patch("server.graph.nodes.research_store", MagicMock()),
         ):
             await graph.ainvoke(
                 {

@@ -92,6 +92,24 @@ describe('useSessionEvents', () => {
     );
   }
 
+  it('ignores malformed event payloads', async () => {
+    renderHook(() => useSessionEvents('session-1', true), { wrapper });
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    act(() => {
+      FakeEventSource.instances[0].emit('stage_changed', 'not-json{');
+      FakeEventSource.instances[0].emit('stage_changed', {
+        id: 'x',
+        session_id: 1,
+        event_type: null,
+      });
+    });
+    const data = client.getQueryData<LearningSessionWithNodes>([
+      'learningSession',
+      'session-1',
+    ]);
+    expect(data?.generation?.last_event_id).toBe(4);
+  });
+
   it('opens EventSource with after cursor from cache', async () => {
     renderHook(() => useSessionEvents('session-1', true), { wrapper });
     await waitFor(() => {

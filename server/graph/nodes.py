@@ -69,7 +69,16 @@ from server.schemas.generation import (
     GroundingStatus,
 )
 from server.schemas.learning import CourseOutline, FailedStep, NodeStatus, QuizSet, TopicNode
-from server.schemas.progress import ProgressEventType, StageChangedPayload
+from server.schemas.progress import (
+    GenerationCompletePayload,
+    ModuleFailedPayload,
+    ModuleReadyPayload,
+    OutlineReadyPayload,
+    ProgressEventType,
+    ResearchDegradedPayload,
+    StageChangedPayload,
+)
+from server.schemas.generation import GenerationWarning
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 from server.services.research_runner import run_research
@@ -77,6 +86,113 @@ from server.services.research_runner import run_research
 logger = logging.getLogger(__name__)
 
 BatchSpec = namedtuple("BatchSpec", ["start", "size"])
+
+
+def _append_job_warning(session_id: str, warning: GenerationWarning) -> None:
+    """Append a safe warning to the generation job public surface."""
+    try:
+        from datetime import datetime, timezone
+
+        from server.database.sqlite_utils import (
+            canonical_json,
+            optional_transaction,
+        )
+
+        job = generation_job_store.get_by_session(session_id)
+        if job is None:
+            return
+        warnings = [
+            w.model_dump(mode="json") if hasattr(w, "model_dump") else w
+            for w in list(job.warnings)
+        ]
+        warnings.append(warning.model_dump(mode="json"))
+        with optional_transaction(generation_job_store.db_path, None) as conn:
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET warnings_json = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    canonical_json(warnings),
+                    datetime.now(timezone.utc).isoformat(),
+                    session_id,
+                ),
+            )
+    except Exception:
+        logger.debug("warning append skipped for session %s", session_id)
+
+
+def _bump_job_counts(
+    session_id: str,
+    *,
+    topics_total: Optional[int] = None,
+    briefs_ready: Optional[int] = None,
+    topics_ready_delta: int = 0,
+    topics_failed_delta: int = 0,
+    research_sections: Optional[int] = None,
+    sources: Optional[int] = None,
+    grounding_status: Optional[GroundingStatus] = None,
+) -> None:
+    """Best-effort update of generation job counts without requiring a lock."""
+    try:
+        from datetime import datetime, timezone
+
+        from server.database.sqlite_utils import (
+            canonical_json,
+            optional_transaction,
+        )
+        from server.schemas.generation import GenerationCounts
+
+        job = generation_job_store.get_by_session(session_id)
+        if job is None:
+            return
+        counts = job.counts
+        updates: dict[str, int] = {}
+        if topics_total is not None:
+            updates["topics_total"] = topics_total
+        if briefs_ready is not None:
+            updates["briefs_ready"] = briefs_ready
+        if topics_ready_delta:
+            updates["topics_ready"] = counts.topics_ready + topics_ready_delta
+        if topics_failed_delta:
+            updates["topics_failed"] = counts.topics_failed + topics_failed_delta
+        if research_sections is not None:
+            updates["research_sections"] = research_sections
+        if sources is not None:
+            updates["sources"] = sources
+        if updates:
+            counts = counts.model_copy(update=updates)
+        with optional_transaction(generation_job_store.db_path, None) as conn:
+            if grounding_status is not None:
+                conn.execute(
+                    """
+                    UPDATE generation_jobs
+                    SET counts_json = ?, grounding_status = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        canonical_json(counts),
+                        grounding_status.value,
+                        datetime.now(timezone.utc).isoformat(),
+                        session_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE generation_jobs
+                    SET counts_json = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        canonical_json(counts),
+                        datetime.now(timezone.utc).isoformat(),
+                        session_id,
+                    ),
+                )
+    except Exception:
+        logger.debug("count bump skipped for session %s", session_id)
 
 
 def select_topic_batch(cursor: int, total_topics: int) -> BatchSpec:
@@ -223,10 +339,41 @@ async def researcher_node(
                 search_context=search_ctx,
             )
             degraded = is_degraded
-        except Exception as exc:
-            logger.warning("Research failed for session %s, degrading: %s", session_id, exc)
+        except Exception:
+            logger.warning(
+                "Research failed for session %s; continuing degraded",
+                session_id,
+            )
             degraded = True
             report_id = None
+            try:
+                warning = GenerationWarning(
+                    code="research_unavailable",
+                    message=(
+                        "Web research unavailable; "
+                        "continuing without grounding."
+                    ),
+                )
+                progress_event_store.append_once(
+                    session_id=session_id,
+                    event_type=ProgressEventType.RESEARCH_DEGRADED,
+                    payload=ResearchDegradedPayload(warning=warning),
+                    dedupe_key=f"research_degraded:{session_id}",
+                )
+                _append_job_warning(session_id, warning)
+            except Exception:
+                pass
+
+    if degraded:
+        _bump_job_counts(
+            session_id,
+            grounding_status=GroundingStatus.DEGRADED,
+        )
+    elif report_id:
+        _bump_job_counts(
+            session_id,
+            grounding_status=GroundingStatus.GROUNDED,
+        )
 
     generation_job_store.update_stage(session_id, GenerationStage.OUTLINING)
     progress_event_store.append_once(
@@ -270,7 +417,20 @@ async def outline_planner_node(
     )
 
     generation_artifact_store.persist_outline(session_id, outline)
+    try:
+        progress_event_store.append_once(
+            session_id=session_id,
+            event_type=ProgressEventType.OUTLINE_READY,
+            payload=OutlineReadyPayload(
+                course_title=outline.course_title,
+                topic_count=len(outline.topics),
+            ),
+            dedupe_key="outline:ready",
+        )
+    except Exception:
+        logger.debug("outline_ready event skipped for session %s", session_id)
 
+    _bump_job_counts(session_id, topics_total=len(outline.topics))
     generation_job_store.update_stage(session_id, GenerationStage.PLANNING_PREVIEW)
     progress_event_store.append_once(
         session_id=session_id,
@@ -347,6 +507,10 @@ async def plan_brief_batch_node(
         raise ResumableGenerationError(f"Brief generation failed: {exc}") from exc
 
     generation_artifact_store.persist_briefs(session_id, brief_batch)
+    _bump_job_counts(
+        session_id,
+        briefs_ready=batch.start + batch.size,
+    )
 
     stage_gen = GenerationStage.GENERATING_PREVIEW if batch.start == 0 else GenerationStage.GENERATING_BATCH
     generation_job_store.update_stage(session_id, stage_gen)
@@ -400,12 +564,14 @@ async def generator_node(
     raise_if_cancel_requested(session_id)
 
     llm_ctx = _get_llm_context(runtime)
-    node_id = generation_artifact_store._node_id_for_topic(session_id, seq_idx) if hasattr(generation_artifact_store, "_node_id_for_topic") else f"node-{seq_idx}"
+    node_id = generation_artifact_store.node_id_for_topic(session_id, seq_idx)
 
     try:
         topic = generation_artifact_store.get_topic(session_id, seq_idx)
         brief = generation_artifact_store.get_brief(node_id)
-        prev_summary, next_summary = generation_artifact_store.get_adjacent_summaries(session_id, seq_idx)
+        prev_summary, next_summary = (
+            generation_artifact_store.get_adjacent_summaries(session_id, seq_idx)
+        )
 
         content: GeneratedContent = await generator_agent.generate_explanation(
             topic=topic,
@@ -415,11 +581,20 @@ async def generator_node(
             llm_context=llm_ctx,
         )
 
-        learning_manager.update_node_content(
+        generation_artifact_store.persist_generated_content(
             node_id=node_id,
             content_markdown=content.content_markdown,
-            status=NodeStatus.GENERATING,
         )
+        if content.citations:
+            try:
+                generation_artifact_store.replace_node_sources(
+                    node_id,
+                    content.citations,
+                )
+            except Exception:
+                logger.debug(
+                    "citation persist deferred for node %s", node_id
+                )
 
         return {
             "generator_results": [
@@ -433,23 +608,43 @@ async def generator_node(
         }
     except GenerationCancelled:
         raise
-    except Exception as exc:
-        logger.exception("Generator failed for session %s index %s: %s", session_id, seq_idx, exc)
-        learning_manager.update_node_content(
-            node_id=node_id,
-            content_markdown="Content generation failed.",
-            status=NodeStatus.ERROR,
-            error_message=str(exc),
-            retry_available=True,
-            failed_step=FailedStep.GENERATOR,
+    except Exception:
+        logger.error(
+            "Generator failed for session %s index %s",
+            session_id,
+            seq_idx,
         )
+        generation_artifact_store.persist_topic_error(
+            node_id=node_id,
+            failed_step=FailedStep.GENERATOR.value,
+            safe_error_message="Content generation failed.",
+            content_markdown="Content generation failed.",
+        )
+        try:
+            progress_event_store.append_once(
+                session_id=session_id,
+                event_type=ProgressEventType.MODULE_FAILED,
+                payload=ModuleFailedPayload(
+                    node_id=node_id,
+                    sequence_index=seq_idx,
+                    failed_step=FailedStep.GENERATOR.value,
+                    warning=GenerationWarning(
+                        code="generator_failed",
+                        message="Topic content generation failed.",
+                    ),
+                ),
+                dedupe_key=f"module_failed:{seq_idx}:generator",
+            )
+        except Exception:
+            pass
+        _bump_job_counts(session_id, topics_failed_delta=1)
         return {
             "generator_results": [
                 {
                     "batch_start": batch_start,
                     "sequence_index": seq_idx,
                     "content_ready": False,
-                    "error_message": str(exc),
+                    "error_message": "generator_failed",
                 }
             ]
         }
@@ -499,27 +694,86 @@ async def quizzer_node(
     raise_if_cancel_requested(session_id)
 
     llm_ctx = _get_llm_context(runtime)
-    node = learning_manager.get_concept_node_by_index(session_id, seq_idx) if hasattr(learning_manager, "get_concept_node_by_index") else None
+    node_id = generation_artifact_store.node_id_for_topic(session_id, seq_idx)
+    node = learning_manager.get_concept_node(node_id)
     if not node:
         all_nodes = learning_manager.get_session_nodes(session_id)
         node = next((n for n in all_nodes if n["sequence_index"] == seq_idx), None)
 
-    if not node or node.get("status") == NodeStatus.ERROR.value:
+    # Generator-error short-circuit (worker state or prior ERROR node).
+    if isinstance(state, dict) and state.get("error_message"):
+        content_markdown = (
+            state.get("content_markdown") or "Content generation failed."
+        )
+        target_id = node["id"] if node else node_id
+        if node is not None:
+            try:
+                learning_manager.update_node_content(
+                    node_id=target_id,
+                    content_markdown=content_markdown,
+                    status=NodeStatus.ERROR,
+                    error_message="Content generation failed.",
+                    retry_available=True,
+                    failed_step=FailedStep.GENERATOR,
+                )
+            except Exception:
+                generation_artifact_store.persist_topic_error(
+                    node_id=target_id,
+                    failed_step=FailedStep.GENERATOR.value,
+                    safe_error_message="Content generation failed.",
+                    content_markdown=content_markdown,
+                )
         return {
             "topic_results": [
                 {
                     "batch_start": batch_start,
                     "sequence_index": seq_idx,
                     "terminal_status": "ERROR",
-                    "error_message": node.get("error_message") if node else "Node not found",
+                    "error_message": "generator_failed",
+                }
+            ]
+        }
+
+    if (
+        not node
+        or node.get("status") == NodeStatus.ERROR.value
+        or node.get("generation_status") == "ERROR"
+    ):
+        return {
+            "topic_results": [
+                {
+                    "batch_start": batch_start,
+                    "sequence_index": seq_idx,
+                    "terminal_status": "ERROR",
+                    "error_message": (
+                        node.get("error_message") if node else "Node not found"
+                    ),
                 }
             ]
         }
 
     try:
-        topic = generation_artifact_store.get_topic(session_id, seq_idx)
+        try:
+            topic = generation_artifact_store.get_topic(session_id, seq_idx)
+        except Exception:
+            topic_data = state.get("topic_data") if isinstance(state, dict) else None
+            if topic_data:
+                topic = TopicNode.model_validate(topic_data)
+            else:
+                topic = TopicNode(
+                    index=seq_idx,
+                    title=node.get("title") or f"Topic {seq_idx}",
+                    summary_for_context=node.get("summary_for_context")
+                    or node.get("title")
+                    or f"Topic {seq_idx}",
+                    key_terms=["topic", "concept"],
+                )
         brief = generation_artifact_store.get_brief(node["id"])
-        content_markdown = node.get("content_markdown") or ""
+        content_markdown = (
+            (state.get("content_markdown") if isinstance(state, dict) else None)
+            or node.get("content_markdown")
+            or ""
+        )
 
         quiz_set: QuizSet = await quizzer_agent.generate_quiz_set(
             topic=topic,
@@ -539,12 +793,33 @@ async def quizzer_node(
         if seq_idx == 0 or previous_status == NodeStatus.COMPLETED.value:
             new_status = NodeStatus.VIEWING_EXPLANATION
 
-        learning_manager.update_node_content(
-            node_id=node["id"],
-            content_markdown=content_markdown,
-            status=new_status,
-            quiz_set=quiz_set,
-        )
+        try:
+            generation_artifact_store.persist_topic_success(
+                node_id=node["id"],
+                quiz_set=quiz_set,
+                citations=[],
+            )
+        except Exception:
+            learning_manager.update_node_content(
+                node_id=node["id"],
+                content_markdown=content_markdown,
+                status=new_status,
+                quiz_set=quiz_set,
+            )
+
+        try:
+            progress_event_store.append_once(
+                session_id=session_id,
+                event_type=ProgressEventType.MODULE_READY,
+                payload=ModuleReadyPayload(
+                    node_id=node["id"],
+                    sequence_index=seq_idx,
+                ),
+                dedupe_key=f"module_ready:{seq_idx}",
+            )
+        except Exception:
+            pass
+        _bump_job_counts(session_id, topics_ready_delta=1)
 
         return {
             "topic_results": [
@@ -558,23 +833,56 @@ async def quizzer_node(
         }
     except GenerationCancelled:
         raise
-    except Exception as exc:
-        logger.exception("Quizzer failed for session %s index %s: %s", session_id, seq_idx, exc)
-        learning_manager.update_node_content(
-            node_id=node["id"],
-            content_markdown=node.get("content_markdown") or "",
-            status=NodeStatus.ERROR,
-            error_message=str(exc),
-            retry_available=True,
-            failed_step=FailedStep.QUIZZER,
+    except Exception:
+        logger.error(
+            "Quizzer failed for session %s index %s",
+            session_id,
+            seq_idx,
         )
+        content_markdown = (node or {}).get("content_markdown") or ""
+        if isinstance(state, dict) and state.get("content_markdown"):
+            content_markdown = state["content_markdown"]
+        try:
+            learning_manager.update_node_content(
+                node_id=node["id"],
+                content_markdown=content_markdown,
+                status=NodeStatus.ERROR,
+                error_message="Quiz generation failed.",
+                retry_available=True,
+                failed_step=FailedStep.QUIZZER,
+            )
+        except Exception:
+            generation_artifact_store.persist_topic_error(
+                node_id=node["id"],
+                failed_step=FailedStep.QUIZZER.value,
+                safe_error_message="Quiz generation failed.",
+                content_markdown=content_markdown,
+            )
+        try:
+            progress_event_store.append_once(
+                session_id=session_id,
+                event_type=ProgressEventType.MODULE_FAILED,
+                payload=ModuleFailedPayload(
+                    node_id=node["id"],
+                    sequence_index=seq_idx,
+                    failed_step=FailedStep.QUIZZER.value,
+                    warning=GenerationWarning(
+                        code="quizzer_failed",
+                        message="Topic quiz generation failed.",
+                    ),
+                ),
+                dedupe_key=f"module_failed:{seq_idx}:quizzer",
+            )
+        except Exception:
+            pass
+        _bump_job_counts(session_id, topics_failed_delta=1)
         return {
             "topic_results": [
                 {
                     "batch_start": batch_start,
                     "sequence_index": seq_idx,
                     "terminal_status": "ERROR",
-                    "error_message": str(exc),
+                    "error_message": "quizzer_failed",
                 }
             ]
         }
@@ -614,24 +922,72 @@ async def finalize_generation_node(
     session_id = state["session_id"]
     raise_if_cancel_requested(session_id)
 
-    topic_results = state.get("topic_results", [])
-    has_errors = any(item.get("terminal_status") == "ERROR" for item in topic_results)
-    degraded = state.get("degraded", False) or has_errors
-
-    final_stage = GenerationStage.COMPLETE_DEGRADED if degraded else GenerationStage.COMPLETE
-
-    generation_job_store.update_stage(session_id, final_stage)
-    progress_event_store.append_once(
-        session_id=session_id,
-        event_type=ProgressEventType.STAGE_CHANGED,
-        payload=StageChangedPayload(
-            previous_stage=GenerationStage.GENERATING_BATCH,
-            stage=final_stage,
-        ),
-        dedupe_key=f"stage_finalize_{final_stage.value}",
+    # Research degradation drives COMPLETE_DEGRADED; per-topic errors stay
+    # COMPLETE so partial courses remain fully usable without false labels.
+    degraded = bool(state.get("degraded", False))
+    final_stage = (
+        GenerationStage.COMPLETE_DEGRADED if degraded else GenerationStage.COMPLETE
     )
 
-    logger.info("Generation job finalized for session %s with stage %s", session_id, final_stage.value)
+    job = None
+    try:
+        job = generation_job_store.get_by_session(session_id)
+    except Exception:
+        job = None
+    grounding = (
+        job.grounding_status if job is not None else GroundingStatus.DISABLED
+    )
+    if degraded and grounding in {
+        GroundingStatus.PENDING,
+        GroundingStatus.DISABLED,
+    }:
+        grounding = GroundingStatus.DEGRADED
+        _bump_job_counts(session_id, grounding_status=grounding)
+    elif (
+        not degraded
+        and state.get("web_search_enabled")
+        and grounding == GroundingStatus.PENDING
+    ):
+        grounding = GroundingStatus.GROUNDED
+        _bump_job_counts(session_id, grounding_status=grounding)
+
+    try:
+        generation_job_store.update_stage(session_id, final_stage)
+    except Exception:
+        pass
+    counts = job.counts if job is not None else None
+    if counts is None:
+        from server.schemas.generation import GenerationCounts
+
+        counts = GenerationCounts()
+    try:
+        progress_event_store.append_once(
+            session_id=session_id,
+            event_type=ProgressEventType.STAGE_CHANGED,
+            payload=StageChangedPayload(
+                previous_stage=GenerationStage.GENERATING_BATCH,
+                stage=final_stage,
+            ),
+            dedupe_key=f"stage_finalize_{final_stage.value}",
+        )
+        progress_event_store.append_once(
+            session_id=session_id,
+            event_type=ProgressEventType.GENERATION_COMPLETE,
+            payload=GenerationCompletePayload(
+                stage=final_stage,
+                counts=counts,
+                grounding_status=grounding,
+            ),
+            dedupe_key="generation_complete",
+        )
+    except Exception:
+        logger.debug("finalize events skipped for session %s", session_id)
+
+    logger.info(
+        "Generation job finalized for session %s with stage %s",
+        session_id,
+        final_stage.value,
+    )
     return {}
 
 

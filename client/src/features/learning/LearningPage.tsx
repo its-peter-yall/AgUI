@@ -52,10 +52,8 @@ import { hasWebSearchCapability } from "@/lib/providerSettings";
 import { cn } from "@/lib/utils";
 import type { LearningSessionWithNodes } from "@/types/learning";
 import type { ResearchReport } from "@/types/generation";
-import {
-	isTerminalGenerationStage,
-	useSessionEvents,
-} from "./useSessionEvents";
+import { isTerminalGenerationStage, reconcileGenerationSession } from "./generationEvents";
+import { useSessionEvents } from "./useSessionEvents";
 
 export function LearningPage() {
 	const { sessionId } = useParams<{ sessionId: string }>();
@@ -83,7 +81,14 @@ export function LearningPage() {
 		error: sessionError,
 	} = useQuery({
 		queryKey: ["learningSession", sessionId],
-		queryFn: () => getLearningSession(sessionId!),
+		queryFn: async () => {
+			const incoming = await getLearningSession(sessionId!);
+			const current = queryClient.getQueryData<LearningSessionWithNodes>([
+				"learningSession",
+				sessionId,
+			]);
+			return reconcileGenerationSession(current, incoming);
+		},
 		enabled: !!sessionId,
 		staleTime: 0,
 		refetchInterval: (query) => {

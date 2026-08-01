@@ -43,7 +43,7 @@ from server.schemas.generation import (
     GenerationBriefBatch,
     SourceCitation,
 )
-from server.schemas.learning import NodeStatus, QuizSet, TopicNode
+from server.schemas.learning import CourseOutline, NodeStatus, QuizSet, TopicNode
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +331,106 @@ class GenerationArtifactStore:
             complexity=row["complexity"] or "Intermediate",
             quiz_count=quiz_count,
         )
+
+    def persist_briefs(
+        self,
+        session_id: str,
+        batch: GenerationBriefBatch,
+        conn: Optional[sqlite3.Connection] = None,
+    ) -> list[GenerationBrief]:
+        """Alias for upsert_brief_batch used by graph nodes."""
+        return self.upsert_brief_batch(session_id, batch, conn=conn)
+
+    def count_topics(self, session_id: str) -> int:
+        """Return number of outline topic nodes for a session."""
+        with optional_transaction(self.db_path, None) as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM concept_nodes
+                WHERE learning_session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def get_outline(self, session_id: str) -> CourseOutline:
+        """Rebuild CourseOutline from persisted skeleton nodes."""
+        with optional_transaction(self.db_path, None) as conn:
+            session_row = conn.execute(
+                """
+                SELECT course_title FROM learning_sessions WHERE id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            rows = conn.execute(
+                """
+                SELECT sequence_index, title, summary_for_context, key_terms,
+                       complexity
+                FROM concept_nodes
+                WHERE learning_session_id = ?
+                ORDER BY sequence_index ASC
+                """,
+                (session_id,),
+            ).fetchall()
+        if session_row is None:
+            raise LookupError(f"Session not found: {session_id}")
+        topics = [
+            TopicNode(
+                index=int(row["sequence_index"]),
+                title=row["title"],
+                summary_for_context=row["summary_for_context"] or row["title"],
+                key_terms=(
+                    json.loads(row["key_terms"])
+                    if row["key_terms"]
+                    else ["topic", "concept"]
+                ),
+                complexity=row["complexity"] or "Intermediate",
+                quiz_count=1,
+            )
+            for row in rows
+        ]
+        return CourseOutline(
+            course_title=session_row["course_title"] or "Course",
+            topics=topics,
+        )
+
+    def get_adjacent_summaries(
+        self,
+        session_id: str,
+        topic_index: int,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return previous and next topic summaries for context injection."""
+        prev_summary: Optional[str] = None
+        next_summary: Optional[str] = None
+        with optional_transaction(self.db_path, None) as conn:
+            if topic_index > 0:
+                prev_row = conn.execute(
+                    """
+                    SELECT summary_for_context FROM concept_nodes
+                    WHERE learning_session_id = ? AND sequence_index = ?
+                    """,
+                    (session_id, topic_index - 1),
+                ).fetchone()
+                if prev_row is not None:
+                    prev_summary = prev_row["summary_for_context"]
+            next_row = conn.execute(
+                """
+                SELECT summary_for_context FROM concept_nodes
+                WHERE learning_session_id = ? AND sequence_index = ?
+                """,
+                (session_id, topic_index + 1),
+            ).fetchone()
+            if next_row is not None:
+                next_summary = next_row["summary_for_context"]
+        return prev_summary, next_summary
+
+    def node_id_for_topic(self, session_id: str, topic_index: int) -> str:
+        """Public wrapper for deterministic node ID derivation."""
+        return _node_id_for_topic(session_id, topic_index)
+
+    def _node_id_for_topic(self, session_id: str, topic_index: int) -> str:
+        """Instance alias matching graph node call sites."""
+        return _node_id_for_topic(session_id, topic_index)
 
     def persist_generated_content(
         self,

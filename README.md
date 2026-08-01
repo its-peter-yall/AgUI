@@ -215,16 +215,33 @@ npm run dev
 - `/learn/:sessionId/revise/:revisionId` - Revision session
 - `/settings` - Provider configuration
 
+### Optional Internet Grounding
+
+Progressive course generation can optionally research current sources before outlining.
+
+- Master capability **defaults OFF**; each new course opt-in also **defaults OFF**.
+- Provider registry: **Tavily**, **Exa**, **Brave Search**, **SerpAPI** (configure keys in Settings; verify current provider terms).
+- Keys remain in browser localStorage at rest and are sent only on generate/resume requests that need them.
+- `POST /learning/generate` returns **202** immediately; UI then uses credential-free SSE plus two-second polling repair.
+- Progress stream: GET /learning/sessions/{id}/events (credential-free).
+- Resume unfinished work: POST /learning/sessions/{id}/resume (fresh keys when research unfinished).
+- Research degradation continues useful generation but never shows a grounded label.
+- Operator runbook: `docs/internet-grounded-course-generation/operations.md`.
+
 ### API Endpoints (Learning System)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/learning/generate` | Create new course from topic |
+| `POST` | `/learning/generate` | Accept course job (**202** shell); progressive generation |
 | `GET` | `/learning/sessions` | List learning sessions (paginated) |
-| `GET` | `/learning/sessions/{id}` | Get session with nodes |
+| `GET` | `/learning/sessions/{id}` | Pollable session snapshot with generation stage |
+| `GET` | `/learning/sessions/{id}/events` | Replayable SSE progress stream |
+| `GET` | `/learning/sessions/{id}/research` | Public research report and sources |
+| `POST` | `/learning/sessions/{id}/cancel` | Cooperative cancel; retain artifacts |
+| `POST` | `/learning/sessions/{id}/resume` | Resume paused/cancelled job with fresh keys |
 | `GET` | `/learning/sessions/{id}/progress` | Get progress summary |
 | `PATCH` | `/learning/sessions/{id}/last-active` | Update last active node |
-| `DELETE` | `/learning/sessions/{id}` | Delete session with cascade |
+| `DELETE` | `/learning/sessions/{id}` | Permanent cleanup (stop work + cascade delete) |
 | `GET` | `/learning/nodes/{id}` | Get concept node with visibility |
 | `POST` | `/learning/nodes/{id}/transition` | Transition node state |
 | `POST` | `/learning/nodes/{id}/submit-quiz` | Submit quiz answer |
@@ -253,6 +270,7 @@ npm run build        # Build for production
 npm run lint         # Run ESLint
 npm run test         # Run tests (watch mode)
 npm run test -- --run  # Run tests once
+npm run test:generation:coverage  # Focused >80% generation module coverage
 ```
 
 ### Backend Commands

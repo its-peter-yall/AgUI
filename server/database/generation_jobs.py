@@ -824,17 +824,61 @@ class GenerationJobStore:
         session_id: str,
         completed_topics: int,
     ) -> None:
-        """Update cursor completed topics for session."""
+        """Update cursor next_topic_index for session."""
         try:
             with optional_transaction(self.db_path, None) as conn:
-                cursor_json = canonical_json(GenerationCursor(completed_topics=completed_topics))
+                row = conn.execute(
+                    "SELECT cursor_json, counts_json FROM generation_jobs"
+                    " WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if row is None:
+                    return
+                cursor = GenerationCursor.model_validate_json(row["cursor_json"])
+                cursor = cursor.model_copy(
+                    update={"next_topic_index": completed_topics}
+                )
+                counts = GenerationCounts.model_validate_json(row["counts_json"])
+                counts = counts.model_copy(
+                    update={"topics_ready": max(counts.topics_ready, completed_topics)}
+                )
                 conn.execute(
                     """
                     UPDATE generation_jobs
-                    SET cursor_json = ?, updated_at = ?
+                    SET cursor_json = ?, counts_json = ?, updated_at = ?
                     WHERE session_id = ?
                     """,
-                    (cursor_json, _utc_now(None).isoformat(), session_id),
+                    (
+                        canonical_json(cursor),
+                        canonical_json(counts),
+                        _utc_now(None).isoformat(),
+                        session_id,
+                    ),
+                )
+        except (sqlite3.OperationalError, LookupError, ValueError):
+            pass
+
+    def mark_failed(
+        self,
+        session_id: str,
+        safe_message: str = "Generation failed",
+    ) -> None:
+        """Mark job FAILED without logging untrusted exception text."""
+        del safe_message  # retained for call-site clarity; not persisted
+        try:
+            with optional_transaction(self.db_path, None) as conn:
+                conn.execute(
+                    """
+                    UPDATE generation_jobs
+                    SET stage = ?, lock_owner = NULL, lock_expires_at = NULL,
+                        updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        GenerationStage.FAILED.value,
+                        _utc_now(None).isoformat(),
+                        session_id,
+                    ),
                 )
         except (sqlite3.OperationalError, LookupError):
             pass

@@ -148,4 +148,52 @@ describe('CourseSourcesPanel', () => {
     expect(screen.getByText(/Retrieved 2026-08-01/i)).toBeInTheDocument();
     expect(screen.getByText(/Cascading Style Sheets/i)).toBeInTheDocument();
   });
+
+  it('renders nothing when closed and handles close + unsafe urls', () => {
+    const onClose = vi.fn();
+    const { rerender, container } = render(
+      <CourseSourcesPanel isOpen={false} onClose={onClose} report={baseReport} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <CourseSourcesPanel
+        isOpen
+        onClose={onClose}
+        report={{
+          ...baseReport,
+          status: 'COMPLETE',
+          limitations: ['Partial coverage'],
+          sources: [
+            {
+              ...baseReport.sources[0],
+              url: 'javascript:void(0)',
+              published_at: null,
+              retrieved_at: null,
+              excerpt: '',
+              snippet: 'snippet only',
+              publisher: null,
+            },
+          ],
+          sections: [],
+        }}
+      />,
+    );
+    expect(screen.getByText('MDN CSS').tagName).toBe('SPAN');
+    expect(screen.getByText(/snippet only/i)).toBeInTheDocument();
+    expect(screen.getByText(/Partial coverage/i)).toBeInTheDocument();
+    screen.getByRole('button', { name: /close course sources/i }).click();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('shows empty report state and closes on Escape', () => {
+    const onClose = vi.fn();
+    render(
+      <CourseSourcesPanel isOpen onClose={onClose} report={null} />,
+    );
+    expect(
+      screen.getByText(/research report not available yet/i),
+    ).toBeInTheDocument();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onClose).toHaveBeenCalled();
+  });
 });

@@ -454,7 +454,7 @@ class PlannerAgent(BaseAgent):
             return batch
 
         if grounding_status == GroundingStatus.DISABLED:
-            raise ValueError(error_msg)
+            raise ResumablePlannerError(error_msg)
 
         # Retry once with explicit correction prompt
         logger.warning("Brief batch validation failed: %s. Attempting correction.", error_msg)

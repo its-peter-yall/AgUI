@@ -45,6 +45,22 @@ export function isTerminalGenerationStage(
  * Applies a generation event to a session cache entry.
  * Returns the original reference when the event id is not newer.
  */
+export const reconcileGenerationSession = (
+  current: LearningSessionWithNodes | undefined,
+  incoming: LearningSessionWithNodes,
+): LearningSessionWithNodes => {
+  if (!current?.generation || !incoming.generation) {
+    return incoming;
+  }
+  if (
+    incoming.generation.last_event_id <
+    current.generation.last_event_id
+  ) {
+    return current;
+  }
+  return incoming;
+};
+
 export function applyGenerationEvent(
   session: LearningSessionWithNodes,
   event: GenerationEvent & { generation?: GenerationJobPublic | null },

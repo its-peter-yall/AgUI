@@ -115,4 +115,76 @@ describe('GenerationStatusPanel', () => {
     expect(resume).toHaveBeenCalledOnce();
     expect(screen.getByText(/partial course retained/i)).toBeInTheDocument();
   });
+
+  it('shows degraded and failed stages with warnings and busy controls', () => {
+    const del = vi.fn();
+    render(
+      <GenerationStatusPanel
+        generation={{
+          ...generation,
+          stage: 'COMPLETE_DEGRADED',
+          grounding_status: 'DEGRADED',
+          can_cancel: false,
+          can_resume: false,
+          warnings: [
+            {
+              code: 'research_unavailable',
+              message: 'Web research unavailable',
+              provider_id: null,
+            },
+          ],
+          counts: {
+            ...generation.counts,
+            topics_total: 10,
+            topics_ready: 8,
+            topics_failed: 2,
+          },
+        }}
+        onCancel={vi.fn()}
+        onResume={vi.fn()}
+        onDelete={del}
+        isCancelling
+        isResuming
+        isDeleting
+      />,
+    );
+    expect(
+      screen.getByText(/course complete with research warning/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/web research unavailable/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /delete course permanently/i }),
+    ).toBeDisabled();
+  });
+
+  it('maps paused and failed stages', () => {
+    const { rerender } = render(
+      <GenerationStatusPanel
+        generation={{
+          ...generation,
+          stage: 'PAUSED',
+          can_resume: true,
+          can_cancel: false,
+        }}
+        onCancel={vi.fn()}
+        onResume={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/generation paused/i)).toBeInTheDocument();
+    rerender(
+      <GenerationStatusPanel
+        generation={{
+          ...generation,
+          stage: 'FAILED',
+          can_cancel: false,
+          can_resume: false,
+        }}
+        onCancel={vi.fn()}
+        onResume={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/course generation failed/i)).toBeInTheDocument();
+  });
 });

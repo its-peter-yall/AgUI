@@ -24,7 +24,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { applyGenerationEvent } from './generationEvents';
+import {
+  applyGenerationEvent,
+  reconcileGenerationSession,
+} from './generationEvents';
 import type { GenerationEvent } from '@/types/generation';
 import type { LearningSessionWithNodes } from '@/types/learning';
 
@@ -87,5 +90,100 @@ describe('applyGenerationEvent', () => {
     expect(next).not.toBe(session);
     expect(next.generation?.stage).toBe('OUTLINING');
     expect(session.generation?.stage).toBe('RESEARCHING');
+  });
+
+  it('bumps last_event_id when generation snapshot is absent', () => {
+    const event = {
+      id: 9,
+      event_type: 'stage_changed',
+    } as GenerationEvent;
+    const next = applyGenerationEvent(session, event);
+    expect(next.generation?.last_event_id).toBe(9);
+    expect(next.generation?.stage).toBe('RESEARCHING');
+  });
+
+  it('returns session unchanged when generation missing on event without snapshot', () => {
+    const bare = { ...session, generation: null } as LearningSessionWithNodes;
+    const event = {
+      id: 1,
+      event_type: 'stage_changed',
+    } as GenerationEvent;
+    expect(applyGenerationEvent(bare, event)).toEqual(bare);
+  });
+});
+
+describe('reconcileGenerationSession', () => {
+  it('keeps newer SSE state when a delayed poll returns an older event ID', () => {
+    const current = {
+      ...session,
+      generation: {
+        ...session.generation,
+        stage: 'OUTLINING',
+        last_event_id: 8,
+      },
+    } as LearningSessionWithNodes;
+    const delayedPoll = {
+      ...current,
+      generation: {
+        ...current.generation,
+        stage: 'RESEARCHING',
+        last_event_id: 7,
+      },
+    } as LearningSessionWithNodes;
+
+    expect(reconcileGenerationSession(current, delayedPoll)).toBe(current);
+  });
+
+  it('returns incoming when current generation is missing', () => {
+    const incoming = {
+      ...session,
+      generation: { ...session.generation, last_event_id: 1 },
+    } as LearningSessionWithNodes;
+    expect(reconcileGenerationSession(undefined, incoming)).toBe(incoming);
+    expect(
+      reconcileGenerationSession(
+        { ...session, generation: null } as LearningSessionWithNodes,
+        incoming,
+      ),
+    ).toBe(incoming);
+  });
+
+  it('accepts a poll snapshot at the same or newer event ID', () => {
+    const current = {
+      ...session,
+      generation: { ...session.generation, last_event_id: 8 },
+    } as LearningSessionWithNodes;
+    const repaired = {
+      ...current,
+      nodes: [
+        {
+          id: 'node-1',
+          learning_session_id: 'session-1',
+          sequence_index: 0,
+          title: 'Ready topic',
+          content_markdown: '# Ready topic',
+          status: 'VIEWING_EXPLANATION',
+          error_message: null,
+          retry_available: false,
+          complexity: 'Basic',
+          total_quizzes: 1,
+          quiz: null,
+          quiz_set: null,
+          quiz_hidden: null,
+          quiz_set_hidden: null,
+          created_at: '2026-08-01T00:00:00Z',
+          updated_at: '2026-08-01T00:00:00Z',
+          module_status: 'READY',
+          citations: [],
+        },
+      ],
+      generation: {
+        ...current.generation,
+        stage: 'GENERATING_PREVIEW',
+        last_event_id: 9,
+      },
+    } as LearningSessionWithNodes;
+
+    expect(reconcileGenerationSession(current, repaired)).toBe(repaired);
   });
 });

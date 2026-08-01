@@ -83,10 +83,13 @@ class GenerationRuntime:
             except asyncio.CancelledError:
                 return
             if exc is not None:
-                logger.exception(
-                    "Generation task failed for session %s",
-                    session_id,
-                    exc_info=exc,
+                from server.utils.safe_logging import log_external_failure
+
+                log_external_failure(
+                    logger,
+                    event="generation_task_failed",
+                    session_id=session_id,
+                    error=exc,
                 )
 
         task.add_done_callback(_done)
