@@ -65,3 +65,26 @@ from server.schemas.learning import (
     QuizAttemptResponse,
     QuizAttemptHistory,
 )
+from server.schemas.progress import (
+    GenerationCancelledPayload,
+    GenerationCompletePayload,
+    GenerationPausedPayload,
+    ModuleFailedPayload,
+    ModuleReadyPayload,
+    OutlineReadyPayload,
+    PAYLOAD_BY_EVENT_TYPE,
+    ProgressEvent,
+    ProgressEventType,
+    ResearchDegradedPayload,
+    ResearchSectionReadyPayload,
+    StageChangedPayload,
+)
+from server.schemas.research import (
+    ResearchProviderState,
+    ResearchProviderStatus,
+    ResearchReport,
+    ResearchSection,
+    ResearchSource,
+    ResearchStatus,
+)
+from server.schemas.search import SearchContext
