@@ -307,7 +307,7 @@ class StagedCompatibilityRouterTests(unittest.IsolatedAsyncioTestCase):
         }
         with (
             patch(
-                "server.routers.learning.generation_job_store"
+                "server.database.generation_jobs.generation_job_store"
                 ".create_session_shell_and_job",
                 return_value=(completed, SimpleNamespace(id="job-1")),
             ),
