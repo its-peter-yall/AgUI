@@ -65,6 +65,11 @@ _BLOCK_TAG_RE = re.compile(
     r"<(script|style|iframe|object|embed|svg)\b[^>]*>.*?</\1\s*>",
     re.IGNORECASE | re.DOTALL,
 )
+# N1: unclosed/malformed active elements — drop from open tag to end.
+_UNCLOSED_ACTIVE_RE = re.compile(
+    r"<(script|style|iframe|object|embed|svg)\b[^>]*>.*$",
+    re.IGNORECASE | re.DOTALL,
+)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -167,6 +172,7 @@ def sanitize_source_text(raw: str, *, max_chars: int) -> str:
     if max_chars < 0:
         raise ValueError("max_chars must be non-negative")
     text = _BLOCK_TAG_RE.sub(" ", raw or "")
+    text = _UNCLOSED_ACTIVE_RE.sub(" ", text)
     text = _TAG_RE.sub(" ", text)
     text = html.unescape(text)
     text = _WS_RE.sub(" ", text).strip()

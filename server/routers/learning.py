@@ -419,6 +419,12 @@ def get_learning_sessions(
             if public_job is not None:
                 row["generation_stage"] = public_job.stage.value
                 row["grounding_status"] = public_job.grounding_status.value
+                # M10: nested generation matches client CourseCard contract.
+                row["generation"] = (
+                    public_job.model_dump(mode="json")
+                    if hasattr(public_job, "model_dump")
+                    else public_job
+                )
             typed_sessions.append(LearningSessionSummary.model_validate(row))
         return SessionListResponse(
             sessions=typed_sessions,
@@ -986,21 +992,29 @@ async def delete_learning_session(
                     "stop_for_delete failed for session %s", session_id
                 )
 
+        # M14: checkpoint first so partial failure is retryable without orphans.
+        checkpointer = getattr(request.app.state, "checkpointer", None)
+        if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
+            try:
+                await checkpointer.adelete_thread(f"gen-{session_id}")
+            except Exception as exc:
+                logger.exception(
+                    "Checkpoint delete failed for session %s", session_id
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "Checkpoint cleanup failed; retry delete. "
+                        "App data retained."
+                    ),
+                ) from exc
+
         deleted = learning_manager.delete_learning_session(session_id)
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Learning session not found: {session_id}",
             )
-
-        checkpointer = getattr(request.app.state, "checkpointer", None)
-        if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
-            try:
-                await checkpointer.adelete_thread(f"gen-{session_id}")
-            except Exception:
-                logger.exception(
-                    "Checkpoint delete failed for session %s", session_id
-                )
 
         return DeleteLearningSessionResponse(deleted=True)
     except HTTPException:

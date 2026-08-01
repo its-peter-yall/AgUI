@@ -376,7 +376,25 @@ class GeneratorAgent(BaseAgent):
         logger.error(
             f"GeneratorAgent failed after {max_attempts} attempts. Last error: {last_error}"
         )
-        return content
+        # M13: always sanitize final return even after exhausted retries.
+        cleaned_markdown, valid_citations, warnings = sanitize_grounded_content(
+            markdown=content.content_markdown,
+            citations=content.citations,
+            approved_source_ids=approved_source_ids,
+        )
+        all_warnings = list(content.warnings)
+        for w in warnings:
+            if w not in all_warnings:
+                all_warnings.append(w)
+        if last_error and "mermaid_invalid" not in all_warnings:
+            all_warnings.append("mermaid_invalid")
+        return content.model_copy(
+            update={
+                "content_markdown": cleaned_markdown,
+                "citations": valid_citations,
+                "warnings": all_warnings,
+            }
+        )
 
     def _build_user_message(
         self,

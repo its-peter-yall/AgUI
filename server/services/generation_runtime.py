@@ -258,7 +258,33 @@ class GenerationRuntime:
         if existing is not None and not existing.done():
             raise GenerationAlreadyRunning(session_id)
 
+        previous_stage = job.stage
         updated = self.job_store.prepare_resume(session_id)
+        # M9: emit monotonic progress event so equal-ID polls cannot undo resume.
+        try:
+            from server.database.progress_events import progress_event_store
+            from server.schemas.progress import (
+                ProgressEventType,
+                StageChangedPayload,
+            )
+
+            progress_event_store.append_once(
+                session_id=session_id,
+                event_type=ProgressEventType.STAGE_CHANGED,
+                payload=StageChangedPayload(
+                    previous_stage=previous_stage,
+                    stage=updated.stage,
+                ),
+                dedupe_key=(
+                    f"stage_resume:{session_id}:{updated.stage.value}:"
+                    f"{updated.updated_at.isoformat()}"
+                ),
+            )
+        except Exception:
+            logger = __import__("logging").getLogger(__name__)
+            logger.debug(
+                "resume stage event skipped for session %s", session_id
+            )
         self._schedule(
             session_id=session_id,
             llm_context=llm_context,

@@ -851,6 +851,10 @@ class LearningSessionSummary(BaseModel):
         default=None,
         description="Optional grounding status when a job exists",
     )
+    generation: Optional[Any] = Field(
+        default=None,
+        description="Nested public generation job for dashboard badges (M10)",
+    )
 
 
 class SessionListResponse(BaseModel):

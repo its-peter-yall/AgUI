@@ -748,13 +748,14 @@ class ResearchStore:
         for row in rows:
             node_id = row["node_id"]
             order = int(row["citation_order"])
+            # N2: zero-based stored order maps to 1-based display numbers.
+            citation_number = order + 1 if order >= 0 else order
+            if citation_number < 1:
+                citation_number = len(grouped.get(node_id, [])) + 1
             grouped.setdefault(node_id, []).append(
                 {
                     "source_id": row["source_id"],
-                    "citation_number": order if order > 0 else len(
-                        grouped.get(node_id, [])
-                    )
-                    + 1,
+                    "citation_number": citation_number,
                     "title": row["title"],
                     "url": row["url"],
                     "publisher": row["publisher"],

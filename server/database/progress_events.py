@@ -286,7 +286,7 @@ class ProgressEventStore:
                   )
                 """
                 % placeholders,
-                (*terminal_values, session_id, keep_last),
+                (session_id, *terminal_values, session_id, keep_last),
             )
         if cursor.rowcount > 0:
             logger.info(

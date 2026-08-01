@@ -142,6 +142,7 @@ async def regenerate_failed_node(
         FailedStep.BOTH.value,
     }
 
+    new_citations: list = []
     if run_generator:
         content: GeneratedContent = (
             await generator_agent.generate_explanation(
@@ -153,6 +154,7 @@ async def regenerate_failed_node(
             )
         )
         new_content_markdown = content.content_markdown
+        new_citations = list(content.citations or [])
 
     if run_quizzer:
         new_quiz_set = await quizzer_agent.generate_quiz_set(
@@ -178,6 +180,19 @@ async def regenerate_failed_node(
         retry_available=False,
         failed_step=None,
     )
+
+    # M13: regeneration always replaces citation set, including empty.
+    if run_generator:
+        try:
+            generation_artifact_store.replace_node_sources(
+                node_id,
+                new_citations,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to replace citations on regen for node %s",
+                node_id,
+            )
 
     if not updated_node:
         logger.error("Node vanished during regen: %s", node_id)
