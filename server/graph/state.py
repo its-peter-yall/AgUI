@@ -66,6 +66,8 @@ class CourseGraphContext(TypedDict):
     llm_context: LLMContext
     search_context: SearchContext
     worker_id: str
+    lock: NotRequired[object]
+    shutdown_pause: NotRequired[bool]
 
 
 def merge_generator_results(

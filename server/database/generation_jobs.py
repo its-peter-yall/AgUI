@@ -661,7 +661,11 @@ class GenerationJobStore:
         ttl_seconds: int,
         now: Optional[datetime] = None,
     ) -> Optional[GenerationLock]:
-        """Acquire the per-session fence if no other live worker holds it."""
+        """Acquire the per-session fence if no live worker holds it.
+
+        A live (unexpired) lock is never reacquired, even by the same owner
+        string. Callers must use unique worker UUIDs per execution.
+        """
         timestamp = _utc_now(now)
         expires_at = timestamp + timedelta(seconds=ttl_seconds)
         with optional_transaction(self.db_path, None) as conn:
@@ -676,7 +680,6 @@ class GenerationJobStore:
                 return None
             if (
                 row["lock_owner"] is not None
-                and row["lock_owner"] != owner
                 and row["lock_expires_at"] is not None
                 and row["lock_expires_at"] > timestamp.isoformat()
             ):
@@ -763,26 +766,42 @@ class GenerationJobStore:
     def mark_orphaned_jobs_paused(
         self,
         now: Optional[datetime] = None,
+        *,
+        pause_all_nonterminal: bool = False,
     ) -> list[str]:
-        """Pause jobs whose worker lock is absent or expired at startup."""
+        """Pause orphaned nonterminal jobs at startup or process shutdown.
+
+        By default pauses jobs whose lock is absent/expired. When
+        pause_all_nonterminal is True (process boot/shutdown), also pauses
+        jobs with live locks owned by a prior process that no longer exists.
+        """
         timestamp = _utc_now(now)
-        active_values = tuple(
+        terminal_values = tuple(
             stage.value
             for stage in TERMINAL_STAGES
             | {GenerationStage.PAUSED, GenerationStage.CANCELLED}
         )
-        placeholders = ",".join("?" for _ in active_values)
+        placeholders = ",".join("?" for _ in terminal_values)
         with optional_transaction(self.db_path, None) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT id, session_id, stage FROM generation_jobs
-                WHERE stage NOT IN ({placeholders})
-                  AND (lock_owner IS NULL
-                       OR lock_expires_at IS NULL
-                       OR lock_expires_at <= ?)
-                """,
-                (*active_values, timestamp.isoformat()),
-            ).fetchall()
+            if pause_all_nonterminal:
+                rows = conn.execute(
+                    f"""
+                    SELECT id, session_id, stage FROM generation_jobs
+                    WHERE stage NOT IN ({placeholders})
+                    """,
+                    terminal_values,
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT id, session_id, stage FROM generation_jobs
+                    WHERE stage NOT IN ({placeholders})
+                      AND (lock_owner IS NULL
+                           OR lock_expires_at IS NULL
+                           OR lock_expires_at <= ?)
+                    """,
+                    (*terminal_values, timestamp.isoformat()),
+                ).fetchall()
             paused: list[str] = []
             for row in rows:
                 conn.execute(
@@ -804,59 +823,83 @@ class GenerationJobStore:
         self,
         session_id: str,
         stage: GenerationStage,
+        *,
+        lock: Optional[GenerationLock] = None,
     ) -> None:
-        """Update job stage without requiring a worker lock."""
-        try:
-            with optional_transaction(self.db_path, None) as conn:
-                conn.execute(
-                    """
-                    UPDATE generation_jobs
-                    SET stage = ?, updated_at = ?
-                    WHERE session_id = ?
-                    """,
-                    (stage.value, _utc_now(None).isoformat(), session_id),
+        """Update job stage; when lock provided, fence mutation by token."""
+        timestamp = _utc_now(None)
+        with optional_transaction(self.db_path, None) as conn:
+            if lock is not None:
+                if not self._check_lock_holds(
+                    conn, session_id, lock, timestamp
+                ):
+                    raise GenerationLockConflict(
+                        f"Lock for session {session_id} is stale or fenced"
+                    )
+            cursor = conn.execute(
+                """
+                UPDATE generation_jobs
+                SET stage = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (stage.value, timestamp.isoformat(), session_id),
+            )
+            if cursor.rowcount == 0:
+                raise GenerationJobNotFound(
+                    f"Generation job for session {session_id} not found"
                 )
-        except (sqlite3.OperationalError, LookupError):
-            pass
 
     def update_progress(
         self,
         session_id: str,
         completed_topics: int,
+        *,
+        lock: Optional[GenerationLock] = None,
     ) -> None:
-        """Update cursor next_topic_index for session."""
-        try:
-            with optional_transaction(self.db_path, None) as conn:
-                row = conn.execute(
-                    "SELECT cursor_json, counts_json FROM generation_jobs"
-                    " WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone()
-                if row is None:
-                    return
-                cursor = GenerationCursor.model_validate_json(row["cursor_json"])
-                cursor = cursor.model_copy(
-                    update={"next_topic_index": completed_topics}
+        """Update cursor next_topic_index for session; fence when lock given."""
+        timestamp = _utc_now(None)
+        with optional_transaction(self.db_path, None) as conn:
+            if lock is not None:
+                if not self._check_lock_holds(
+                    conn, session_id, lock, timestamp
+                ):
+                    raise GenerationLockConflict(
+                        f"Lock for session {session_id} is stale or fenced"
+                    )
+            row = conn.execute(
+                "SELECT cursor_json, counts_json FROM generation_jobs"
+                " WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                raise GenerationJobNotFound(
+                    f"Generation job for session {session_id} not found"
                 )
-                counts = GenerationCounts.model_validate_json(row["counts_json"])
-                counts = counts.model_copy(
-                    update={"topics_ready": max(counts.topics_ready, completed_topics)}
-                )
-                conn.execute(
-                    """
-                    UPDATE generation_jobs
-                    SET cursor_json = ?, counts_json = ?, updated_at = ?
-                    WHERE session_id = ?
-                    """,
-                    (
-                        canonical_json(cursor),
-                        canonical_json(counts),
-                        _utc_now(None).isoformat(),
-                        session_id,
-                    ),
-                )
-        except (sqlite3.OperationalError, LookupError, ValueError):
-            pass
+            cursor = GenerationCursor.model_validate_json(row["cursor_json"])
+            cursor = cursor.model_copy(
+                update={"next_topic_index": completed_topics}
+            )
+            counts = GenerationCounts.model_validate_json(row["counts_json"])
+            counts = counts.model_copy(
+                update={
+                    "topics_ready": max(
+                        counts.topics_ready, completed_topics
+                    )
+                }
+            )
+            conn.execute(
+                """
+                UPDATE generation_jobs
+                SET cursor_json = ?, counts_json = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (
+                    canonical_json(cursor),
+                    canonical_json(counts),
+                    timestamp.isoformat(),
+                    session_id,
+                ),
+            )
 
     def mark_failed(
         self,

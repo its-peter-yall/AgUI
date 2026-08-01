@@ -81,9 +81,57 @@ from server.schemas.progress import (
 from server.schemas.generation import GenerationWarning
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
-from server.services.research_runner import run_research
+from server.services.research_runner import ResearchCancelled, run_research
 
 logger = logging.getLogger(__name__)
+
+
+def _get_lock(runtime: Any = None) -> Any:
+    """Extract fenced GenerationLock from runtime context when present."""
+    if runtime is None:
+        return None
+    ctx = getattr(runtime, "context", None)
+    if isinstance(ctx, dict):
+        return ctx.get("lock")
+    return getattr(ctx, "lock", None) if ctx is not None else None
+
+
+def _fenced_update_stage(
+    session_id: str,
+    stage: GenerationStage,
+    runtime: Any = None,
+) -> None:
+    """Update stage with lock fence when available."""
+    lock = _get_lock(runtime)
+    try:
+        if lock is not None:
+            generation_job_store.update_stage(
+                session_id, stage, lock=lock
+            )
+        else:
+            generation_job_store.update_stage(session_id, stage)
+    except TypeError:
+        generation_job_store.update_stage(session_id, stage)
+
+
+def _fenced_update_progress(
+    session_id: str,
+    completed_topics: int,
+    runtime: Any = None,
+) -> None:
+    """Update progress with lock fence when available."""
+    lock = _get_lock(runtime)
+    try:
+        if lock is not None:
+            generation_job_store.update_progress(
+                session_id, completed_topics, lock=lock
+            )
+        else:
+            generation_job_store.update_progress(
+                session_id, completed_topics
+            )
+    except TypeError:
+        generation_job_store.update_progress(session_id, completed_topics)
 
 BatchSpec = namedtuple("BatchSpec", ["start", "size"])
 
@@ -291,7 +339,7 @@ async def initialize_generation_node(
         web_enabled = search_ctx.enabled
 
     next_stage = GenerationStage.RESEARCHING if web_enabled else GenerationStage.OUTLINING
-    generation_job_store.update_stage(session_id, next_stage)
+    _fenced_update_stage(session_id, next_stage, runtime)
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
@@ -337,8 +385,15 @@ async def researcher_node(
                 topic_query=state["query"],
                 llm_context=llm_ctx,
                 search_context=search_ctx,
+                resolved_mode=str(state.get("resolved_mode") or "lite"),
+                lock=_get_lock(runtime),
             )
             degraded = is_degraded
+        except ResearchCancelled as exc:
+            # Cancel during research must cancel generation, not degrade.
+            raise GenerationCancelled(session_id) from exc
+        except GenerationCancelled:
+            raise
         except Exception:
             logger.warning(
                 "Research failed for session %s; continuing degraded",
@@ -375,7 +430,7 @@ async def researcher_node(
             grounding_status=GroundingStatus.GROUNDED,
         )
 
-    generation_job_store.update_stage(session_id, GenerationStage.OUTLINING)
+    _fenced_update_stage(session_id, GenerationStage.OUTLINING, runtime)
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
@@ -431,7 +486,9 @@ async def outline_planner_node(
         logger.debug("outline_ready event skipped for session %s", session_id)
 
     _bump_job_counts(session_id, topics_total=len(outline.topics))
-    generation_job_store.update_stage(session_id, GenerationStage.PLANNING_PREVIEW)
+    _fenced_update_stage(
+        session_id, GenerationStage.PLANNING_PREVIEW, runtime
+    )
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
@@ -463,7 +520,7 @@ async def plan_brief_batch_node(
     batch = select_topic_batch(cursor, total_topics)
     stage_plan = GenerationStage.PLANNING_PREVIEW if batch.start == 0 else GenerationStage.PLANNING_BATCH
 
-    generation_job_store.update_stage(session_id, stage_plan)
+    _fenced_update_stage(session_id, stage_plan, runtime)
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
@@ -513,7 +570,7 @@ async def plan_brief_batch_node(
     )
 
     stage_gen = GenerationStage.GENERATING_PREVIEW if batch.start == 0 else GenerationStage.GENERATING_BATCH
-    generation_job_store.update_stage(session_id, stage_gen)
+    _fenced_update_stage(session_id, stage_gen, runtime)
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
@@ -900,7 +957,7 @@ async def advance_batch_node(
     size = state["active_batch_size"]
     next_index = start + size
 
-    generation_job_store.update_progress(session_id, next_index)
+    _fenced_update_progress(session_id, next_index, runtime)
 
     return {
         "next_topic_index": next_index,
@@ -952,7 +1009,7 @@ async def finalize_generation_node(
         _bump_job_counts(session_id, grounding_status=grounding)
 
     try:
-        generation_job_store.update_stage(session_id, final_stage)
+        _fenced_update_stage(session_id, final_stage, runtime)
     except Exception:
         pass
     counts = job.counts if job is not None else None
