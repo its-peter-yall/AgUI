@@ -29,7 +29,6 @@ from typing import Any, Optional
 
 from server.database.generation_jobs import generation_job_store
 from server.database.progress_events import progress_event_store
-from server.graph.build import get_graph
 from server.schemas.generation import (
     GENERATION_LOCK_HEARTBEAT_SECONDS,
     GENERATION_MAX_CONCURRENCY,
@@ -73,6 +72,7 @@ async def run_generation_job(
     event_store: Any = None,
 ) -> None:
     """Run course generation job under an execution lock with heartbeat."""
+    from server.graph.build import get_graph
     js = job_store or generation_job_store
     es = event_store or progress_event_store
 

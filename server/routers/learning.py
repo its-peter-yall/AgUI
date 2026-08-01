@@ -295,165 +295,35 @@ async def _generate_course_with_graph(
     request: Request,
     llm_context: LLMContext,
 ) -> dict:
-    """Generate a learning course using LangGraph."""
-    graph = get_graph(request.app.state)
-    session_ref: dict[str, str] = {}
-    resolved_mode = await resolve_depth_mode(
+    """Generate a learning course using LangGraph via durable runner."""
+    search_context = SearchContext()
+    session, job = generation_job_store.create_session_shell_and_job(
+        session_id=None,
+        user_id=request_body.user_id,
         query=request_body.query,
         mode=request_body.mode,
-        llm_context=llm_context,
+        web_search_requested=search_context.enabled,
     )
-    input_state = {
-        "query": request_body.query,
-        "user_id": request_body.user_id,
-        "mode": request_body.mode,
-        "resolved_mode": resolved_mode,
-        "topic_results": [],
-        "total_start_time": time.perf_counter(),
-    }
-    config = {
-        "configurable": {
-            "thread_id": f"course-{uuid4()}",
-        }
-    }
-    context = {
-        "llm_context": llm_context,
-        "session_ref": session_ref,
-    }
+    session_id = session["id"]
 
-    gen_task = asyncio.create_task(graph.ainvoke(input_state, config, context=context))
-    while not gen_task.done():
-        await asyncio.wait({gen_task}, timeout=0.5)
-        if gen_task.done():
-            break
-        if await request.is_disconnected():
-            logger.info("Client disconnected. Cancelling graph generation...")
-            gen_task.cancel()
-            try:
-                await gen_task
-            except asyncio.CancelledError:
-                session_id = session_ref.get("session_id")
-                if session_id:
-                    learning_manager.delete_learning_session(session_id)
-            raise HTTPException(
-                status_code=499,
-                detail="Generation cancelled",
-            )
-
-    return gen_task.result()
-
-
-def _adjacent_summaries(topics: list[TopicNode], index: int) -> tuple[str, str]:
-    """Return (prev_summary, next_summary) for the topic at *index*."""
-    prev_summary = (
-        topics[index - 1].summary_for_context
-        if index > 0
-        else "Start"
-    )
-    next_summary = (
-        topics[index + 1].summary_for_context
-        if index < len(topics) - 1
-        else "End"
-    )
-    return prev_summary, next_summary
-
-
-async def _generate_single_node_bg(
-    session_id: str,
-    topic_data: dict,
-    prev_summary: str,
-    next_summary: str,
-    llm_context: LLMContext,
-):
-    """Generate content and quiz for a single node in background, updating DB."""
-    session = learning_manager.get_learning_session(session_id)
-    if not session:
-        logger.info(f"Session {session_id} not found. Aborting background node generation.")
-        return
-
-    sequence_index = topic_data.get("index", 0)
-    nodes = learning_manager.get_session_nodes(session_id)
-    existing_node = next((n for n in nodes if n["sequence_index"] == sequence_index), None)
-    if not existing_node:
-        logger.warning(f"Concept node not found for sequence_index {sequence_index} in session {session_id}")
-        return
-
-    if existing_node.get("content_markdown"):
-        logger.info(f"Node at index {sequence_index} already generated. Skipping.")
-        return
-
-    topic = TopicNode(**topic_data)
-    try:
-        content = await generator_agent.generate_explanation(
-            topic=topic,
-            prev_summary=prev_summary if prev_summary != "Start" else None,
-            next_summary=next_summary if next_summary != "End" else None,
+    run_task = asyncio.create_task(
+        run_generation_job(
+            app_state=request.app.state,
+            session_id=session_id,
             llm_context=llm_context,
+            search_context=search_context,
+            resume=False,
         )
-        content_markdown = content.content_markdown
+    )
 
-        quiz_set: QuizSet = await quizzer_agent.generate_quiz_set(
-            topic=topic,
-            content=content_markdown,
-            quiz_count=topic.quiz_count,
-            llm_context=llm_context,
-        )
+    await asyncio.shield(run_task)
 
-        learning_manager.update_node_content(
-            node_id=existing_node["id"],
-            content_markdown=content_markdown,
-            status=NodeStatus.LOCKED,
-            quiz_set=quiz_set,
-        )
-    except Exception as e:
-        logger.error(f"Error in background node generation for index {sequence_index}: {e}", exc_info=True)
-        learning_manager.update_node_content(
-            node_id=existing_node["id"],
-            content_markdown="",
-            status=NodeStatus.ERROR,
-            error_message=str(e),
-            retry_available=True,
-            failed_step=FailedStep.GENERATOR if "generate_explanation" in str(e) else FailedStep.QUIZZER,
-        )
-
-
-async def _generate_remaining_nodes_bg(
-    session_id: str,
-    topics_list: list[dict],
-    llm_context: LLMContext,
-):
-    """
-    Process remaining topics in batches of 5.
-    Wait 30 seconds between batches to avoid rate limits.
-    """
-    topics_to_generate = [t for t in topics_list if t.get("index", 0) >= 3]
-    topic_nodes = [TopicNode(**t) for t in topics_list]
-
-    for i in range(0, len(topics_to_generate), 5):
-        session = learning_manager.get_learning_session(session_id)
-        if not session:
-            logger.info(f"Session {session_id} deleted. Aborting background batch generation.")
-            break
-
-        batch = topics_to_generate[i:i+5]
-        tasks = []
-        for topic_data in batch:
-            idx = topic_data.get("index", 0)
-            prev_sum, next_sum = _adjacent_summaries(topic_nodes, idx)
-            tasks.append(
-                _generate_single_node_bg(
-                    session_id=session_id,
-                    topic_data=topic_data,
-                    prev_summary=prev_sum,
-                    next_summary=next_sum,
-                    llm_context=llm_context,
-                )
-            )
-
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        if i + 5 < len(topics_to_generate):
-            await asyncio.sleep(30)
+    session_record = learning_manager.get_learning_session(session_id)
+    nodes_data = learning_manager.get_session_nodes(session_id)
+    return {
+        "session": session_record,
+        "nodes": nodes_data,
+    }
 
 
 @router.post(
@@ -466,7 +336,6 @@ async def _generate_remaining_nodes_bg(
 async def generate_course(
     request_body: GenerateCourseRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
     llm_context: LLMContext = Depends(get_llm_context),
 ) -> LearningSessionWithNodes:
     """Generate a learning course using LangGraph."""
@@ -480,23 +349,25 @@ async def generate_course(
         session = result.get("session", {})
         session_id = session.get("id")
 
-        # Retrieve ALL nodes from database (including pre-created locked nodes)
         nodes_data = learning_manager.get_session_nodes(session_id)
         nodes = [
             ConceptNodeResponse(**_apply_node_visibility(node)) for node in nodes_data
         ]
 
-        outline = result.get("outline", {})
-        topics = outline.get("topics", [])
-        if len(topics) > 3:
-            background_tasks.add_task(
-                _generate_remaining_nodes_bg,
-                session_id=session_id,
-                topics_list=topics,
-                llm_context=llm_context,
-            )
-
         return LearningSessionWithNodes(**session, nodes=nodes)
+    except HTTPException:
+        raise
+    except OutlineTopicCountError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Error generating course: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        )
     except HTTPException:
         raise
     except OutlineTopicCountError as e:

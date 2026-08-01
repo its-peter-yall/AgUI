@@ -90,22 +90,22 @@ def _client() -> TestClient:
 class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
     """Tests for graph-only router behavior."""
 
-    @patch(
-        "server.routers.learning.resolve_depth_mode",
-        new_callable=AsyncMock,
-    )
     @patch("server.routers.learning.learning_manager.get_session_nodes")
+    @patch("server.routers.learning.learning_manager.get_learning_session")
+    @patch("server.routers.learning.run_generation_job", new_callable=AsyncMock)
+    @patch("server.routers.learning.generation_job_store.create_session_shell_and_job")
     def test_generate_always_uses_graph(
         self,
+        mock_shell: MagicMock,
+        mock_run: AsyncMock,
+        mock_get_session: MagicMock,
         mock_get_nodes: MagicMock,
-        mock_resolve: AsyncMock,
     ) -> None:
-        mock_resolve.return_value = "lite"
-        mock_get_nodes.return_value = _result()["nodes"]
+        res = _result()
+        mock_shell.return_value = (res["session"], SimpleNamespace(id="job-1"))
+        mock_get_session.return_value = res["session"]
+        mock_get_nodes.return_value = res["nodes"]
         client = _client()
-        graph = AsyncMock()
-        graph.ainvoke.return_value = _result()
-        client.app.state.course_graph = graph
 
         response = client.post(
             "/learning/generate",
@@ -118,24 +118,24 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
             response.json()["nodes"][0]["status"],
             "VIEWING_EXPLANATION",
         )
-        graph.ainvoke.assert_awaited_once()
+        mock_run.assert_awaited_once()
 
-    @patch(
-        "server.routers.learning.resolve_depth_mode",
-        new_callable=AsyncMock,
-    )
     @patch("server.routers.learning.learning_manager.get_session_nodes")
+    @patch("server.routers.learning.learning_manager.get_learning_session")
+    @patch("server.routers.learning.run_generation_job", new_callable=AsyncMock)
+    @patch("server.routers.learning.generation_job_store.create_session_shell_and_job")
     def test_generate_response_shape(
         self,
+        mock_shell: MagicMock,
+        mock_run: AsyncMock,
+        mock_get_session: MagicMock,
         mock_get_nodes: MagicMock,
-        mock_resolve: AsyncMock,
     ) -> None:
-        mock_resolve.return_value = "lite"
-        mock_get_nodes.return_value = _result()["nodes"]
+        res = _result()
+        mock_shell.return_value = (res["session"], SimpleNamespace(id="job-1"))
+        mock_get_session.return_value = res["session"]
+        mock_get_nodes.return_value = res["nodes"]
         client = _client()
-        graph = AsyncMock()
-        graph.ainvoke.return_value = _result()
-        client.app.state.course_graph = graph
 
         response = client.post(
             "/learning/generate",
@@ -150,111 +150,12 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(body["nodes"], list)
         self.assertGreater(len(body["nodes"]), 0)
 
-    @patch(
-        "server.routers.learning.resolve_depth_mode",
-        new_callable=AsyncMock,
-    )
-    @patch("server.routers.learning.learning_manager.get_session_nodes")
-    def test_generate_default_mode_auto_resolves(
-        self,
-        mock_get_nodes: MagicMock,
-        mock_resolve: AsyncMock,
-    ) -> None:
-        mock_resolve.return_value = "lite"
-        mock_get_nodes.return_value = _result()["nodes"]
-        client = _client()
-        graph = AsyncMock()
-        graph.ainvoke.return_value = _result()
-        client.app.state.course_graph = graph
-
-        response = client.post(
-            "/learning/generate",
-            json={"query": "test query"},
-        )
-
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body["mode"], "auto")
-        self.assertEqual(body["resolved_mode"], "lite")
-        mock_resolve.assert_awaited_once()
-        invoke_state = graph.ainvoke.await_args.args[0]
-        self.assertEqual(invoke_state["mode"], "auto")
-        self.assertEqual(invoke_state["resolved_mode"], "lite")
-
-    @patch(
-        "server.routers.learning.resolve_depth_mode",
-        new_callable=AsyncMock,
-    )
-    @patch("server.routers.learning.learning_manager.get_session_nodes")
-    def test_generate_explicit_full_mode(
-        self,
-        mock_get_nodes: MagicMock,
-        mock_resolve: AsyncMock,
-    ) -> None:
-        mock_resolve.return_value = "full"
-        session = dict(_result()["session"])  # type: ignore[arg-type]
-        session["mode"] = "full"
-        session["resolved_mode"] = "full"
-        result = {**_result(), "session": session}
-        mock_get_nodes.return_value = result["nodes"]
-        client = _client()
-        graph = AsyncMock()
-        graph.ainvoke.return_value = result
-        client.app.state.course_graph = graph
-
-        response = client.post(
-            "/learning/generate",
-            json={"query": "test query", "mode": "full"},
-        )
-
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body["mode"], "full")
-        self.assertEqual(body["resolved_mode"], "full")
-        mock_resolve.assert_awaited_once()
-        self.assertEqual(
-            mock_resolve.await_args.kwargs.get("mode")
-            or mock_resolve.await_args.args[1],
-            "full",
-        )
-        invoke_state = graph.ainvoke.await_args.args[0]
-        self.assertEqual(invoke_state["mode"], "full")
-        self.assertEqual(invoke_state["resolved_mode"], "full")
-
     def test_generate_invalid_mode_returns_422(self) -> None:
         client = _client()
-        graph = AsyncMock()
-        client.app.state.course_graph = graph
 
         response = client.post(
             "/learning/generate",
             json={"query": "test query", "mode": "turbo"},
-        )
-
-        self.assertEqual(response.status_code, 422)
-        graph.ainvoke.assert_not_awaited()
-
-    @patch(
-        "server.routers.learning.resolve_depth_mode",
-        new_callable=AsyncMock,
-    )
-    @patch("server.routers.learning.learning_manager.get_session_nodes")
-    def test_generate_outline_bounds_error_returns_422(
-        self,
-        mock_get_nodes: MagicMock,
-        mock_resolve: AsyncMock,
-    ) -> None:
-        mock_resolve.return_value = "lite"
-        client = _client()
-        graph = AsyncMock()
-        graph.ainvoke.side_effect = OutlineTopicCountError(
-            "lite", 2, 3, 10,
-        )
-        client.app.state.course_graph = graph
-
-        response = client.post(
-            "/learning/generate",
-            json={"query": "test query", "mode": "lite"},
         )
 
         self.assertEqual(response.status_code, 422)
@@ -380,59 +281,71 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
         mock_regen.assert_not_awaited()
 
-    async def test_graph_cancellation_clears_session_ref(self) -> None:
-        class _Request:
+class StagedCompatibilityRouterTests(unittest.IsolatedAsyncioTestCase):
+    """Tests temporary Phase 4 HTTP wrapper over complete staged graph."""
+
+    async def test_disconnect_check_never_cancels_or_deletes_session(self) -> None:
+        class RequestStub:
             def __init__(self) -> None:
                 self.app = SimpleNamespace(state=SimpleNamespace())
+                self.disconnect_checks = 0
 
             async def is_disconnected(self) -> bool:
+                self.disconnect_checks += 1
                 return True
 
-        request = _Request()
-
-        graph = AsyncMock()
-
-        async def _invoke(
-            *args: object, **kwargs: object,
-        ) -> None:
-            context = kwargs.get("context")
-            if context is None and len(args) > 2:
-                context = args[2]
-            assert context is not None
-            session_ref = context["session_ref"]
-            session_ref["session_id"] = "session-1"
-            await asyncio.sleep(3600)
-
-        graph.ainvoke.side_effect = _invoke
-        request.app.state.course_graph = graph
-
+        request = RequestStub()
+        completed = {
+            "id": "session-1",
+            "user_id": None,
+            "query": "test query",
+            "course_title": "Test Course",
+            "mode": "lite",
+            "resolved_mode": "lite",
+            "created_at": "2026-08-01T00:00:00+00:00",
+            "updated_at": "2026-08-01T00:00:00+00:00",
+            "total_nodes": 3,
+            "completed_nodes": 0,
+            "last_active_node_id": None,
+        }
         with (
             patch(
-                "server.routers.learning.get_graph",
-                return_value=graph,
+                "server.routers.learning.generation_job_store"
+                ".create_session_shell_and_job",
+                return_value=(completed, SimpleNamespace(id="job-1")),
             ),
             patch(
-                "server.routers.learning.resolve_depth_mode",
-                new_callable=AsyncMock,
-                return_value="lite",
+                "server.routers.learning.run_generation_job",
+                new=AsyncMock(),
+            ) as run,
+            patch(
+                "server.routers.learning.learning_manager"
+                ".get_learning_session",
+                return_value=completed,
             ),
             patch(
-                "server.routers.learning"
-                ".learning_manager.delete_learning_session",
-            ) as mock_delete,
+                "server.routers.learning.learning_manager.get_session_nodes",
+                return_value=[],
+            ),
+            patch(
+                "server.routers.learning.learning_manager"
+                ".delete_learning_session"
+            ) as delete,
         ):
-            with self.assertRaises(HTTPException) as ctx:
-                await _generate_course_with_graph(
-                    GenerateCourseRequest(query="test query"),
-                    request,
-                    LLMContext(
-                        api_key="test-key",
-                        model="test/model",
-                    ),
-                )
+            await _generate_course_with_graph(
+                GenerateCourseRequest(query="test query", mode="lite"),
+                request,  # type: ignore[arg-type]
+                LLMContext(api_key="llm-key", model="test/model"),
+            )
+        run.assert_awaited_once()
+        delete.assert_not_called()
+        self.assertEqual(request.disconnect_checks, 0)
 
-        self.assertEqual(ctx.exception.status_code, 499)
-        mock_delete.assert_called_once_with("session-1")
+    def test_old_background_helpers_are_removed(self) -> None:
+        from server.routers import learning
+
+        self.assertFalse(hasattr(learning, "_generate_single_node_bg"))
+        self.assertFalse(hasattr(learning, "_generate_remaining_nodes_bg"))
 
 
 def _quiz_option(label: str, correct: bool) -> QuizOption:

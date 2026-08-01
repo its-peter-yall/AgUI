@@ -686,3 +686,6 @@ class ResearchStore:
                 (session_id, *source_ids),
             ).fetchall()
         return [self._source_from_row(row) for row in rows]
+
+
+research_store = ResearchStore()
