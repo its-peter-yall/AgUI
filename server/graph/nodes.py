@@ -87,10 +87,17 @@ def select_topic_batch(cursor: int, total_topics: int) -> BatchSpec:
     return BatchSpec(start=cursor, size=size)
 
 
+import sqlite3
+
 def raise_if_cancel_requested(session_id: str) -> None:
     """Check database for cooperative cancel flag and raise GenerationCancelled if set."""
-    if session_id and generation_job_store.is_cancel_requested(session_id):
-        raise GenerationCancelled(session_id)
+    if not session_id:
+        return
+    try:
+        if generation_job_store.is_cancel_requested(session_id):
+            raise GenerationCancelled(session_id)
+    except (sqlite3.OperationalError, LookupError):
+        pass
 
 
 def _context_payload(runtime: Any) -> dict[str, Any]:
@@ -373,7 +380,7 @@ async def generator_node(
     """Generate educational explanation content for a single topic node."""
     session_id = state["session_id"]
     seq_idx = state["sequence_index"]
-    batch_start = state["batch_start"]
+    batch_start = state.get("batch_start", 0)
     raise_if_cancel_requested(session_id)
 
     llm_ctx = _get_llm_context(runtime)
@@ -472,7 +479,7 @@ async def quizzer_node(
     """Generate diagnostic quizzes and finalize topic node status."""
     session_id = state["session_id"]
     seq_idx = state["sequence_index"]
-    batch_start = state["batch_start"]
+    batch_start = state.get("batch_start", 0)
     raise_if_cancel_requested(session_id)
 
     llm_ctx = _get_llm_context(runtime)

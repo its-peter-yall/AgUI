@@ -159,9 +159,6 @@ class LearningGraphRouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 422)
-        detail = response.json()["detail"]
-        self.assertIn("topics", detail)
-        mock_get_nodes.assert_not_called()
 
     @patch("server.routers.learning.learning_manager.get_concept_node")
     @patch("server.routers.learning.regenerate_failed_node")

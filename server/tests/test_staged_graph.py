@@ -147,16 +147,34 @@ class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_web_on_runs_research_before_outline(self) -> None:
         calls: list[str] = []
-        graph = build_graph()
+
+        async def fake_research(**kwargs: object) -> tuple[str, bool]:
+            calls.append("research")
+            return ("report-1", False)
+
+        async def fake_plan(*args: object, **kwargs: object) -> CourseOutline:
+            calls.append("outline")
+            return CourseOutline(
+                course_title="Test Course",
+                topics=[
+                    TopicNode(index=0, title="T0", summary_for_context="S0"),
+                    TopicNode(index=1, title="T1", summary_for_context="S1"),
+                    TopicNode(index=2, title="T2", summary_for_context="S2"),
+                ],
+            )
+
+        graph = build_graph(
+            node_overrides={
+                "plan_brief_batch_node": AsyncMock(return_value={"active_batch_start": 0, "active_batch_size": 3}),
+                "generator_node": AsyncMock(return_value={"generator_results": []}),
+                "quizzer_node": AsyncMock(return_value={"topic_results": []}),
+                "advance_batch_node": AsyncMock(return_value={"next_topic_index": 3}),
+                "finalize_generation_node": AsyncMock(return_value={}),
+            }
+        )
         with (
-            patch(
-                "server.graph.nodes.run_research",
-                new=AsyncMock(side_effect=lambda **kwargs: calls.append("research")),
-            ),
-            patch(
-                "server.graph.nodes.run_outline",
-                new=AsyncMock(side_effect=lambda **kwargs: calls.append("outline")),
-            ),
+            patch("server.graph.nodes.run_research", new=AsyncMock(side_effect=fake_research)),
+            patch("server.graph.nodes.planner_agent.plan", new=AsyncMock(side_effect=fake_plan)),
         ):
             await graph.ainvoke(
                 {
@@ -180,6 +198,8 @@ class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
                     "worker_id": "worker-1",
                 },
             )
+        self.assertIn("research", calls)
+        self.assertIn("outline", calls)
         self.assertLess(calls.index("research"), calls.index("outline"))
 
 
