@@ -44,7 +44,7 @@ export const WEB_SEARCH_PROVIDERS: Record<
     id: 'tavily',
     displayName: 'Tavily',
     freeTierSummary:
-      '1,000 API credits each month; no card required.',
+      '1,000 API credits each month; no payment method needed.',
     signupUrl: 'https://app.tavily.com',
     docsUrl:
       'https://docs.tavily.com/documentation/api-reference/endpoint/search',
@@ -59,7 +59,7 @@ export const WEB_SEARCH_PROVIDERS: Record<
     id: 'exa',
     displayName: 'Exa',
     freeTierSummary:
-      '$10 monthly free credits plus signup credits; no card required.',
+      '$10 monthly free credits plus signup credits; no payment method needed.',
     signupUrl: 'https://dashboard.exa.ai/api-keys',
     docsUrl: 'https://exa.ai/docs/reference/search',
     keyHeader: 'X-Exa-Key',
@@ -73,7 +73,7 @@ export const WEB_SEARCH_PROVIDERS: Record<
     id: 'brave',
     displayName: 'Brave Search',
     freeTierSummary:
-      '$5 monthly credits, about 1,000 searches; card required.',
+      '$5 monthly credits, about 1,000 searches on free tier.',
     signupUrl: 'https://api-dashboard.search.brave.com/register',
     docsUrl:
       'https://api-dashboard.search.brave.com/documentation/quickstart',

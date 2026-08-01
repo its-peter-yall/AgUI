@@ -42,6 +42,7 @@ import {
 
 import { useTheme } from "@/hooks/useTheme";
 import { OpenRouterSettingsPanel } from "./OpenRouterSettingsPanel";
+import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel";
 import { ModelPicker } from "./ModelPicker";
 import { getProviderSettings, setProviderConfig } from "@/lib/providerSettings";
 import type { AIProvider } from "@/types/provider";
@@ -204,16 +205,29 @@ export function SettingsPage() {
 					</h2>
 					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
 						<p className="text-xs text-muted-foreground mb-4">
-							Enter your API keys and select models below. Your API keys are
-							saved securely in your local browser storage and are never
-							uploaded to our servers.
+							Keys are stored in this browser. A2UI sends an AI key only for
+							model work and sends search keys only when a web-enabled course
+							start or resume requires them.
 						</p>
 						{/* Always expanded multi-provider config panel */}
 						<OpenRouterSettingsPanel />
 					</div>
 				</section>
 
-				{/* Section 3: Chat Assistant Model */}
+				{/* Section 3: Web Search */}
+				<section className="space-y-4" aria-labelledby="web-search-heading">
+					<h2
+						id="web-search-heading"
+						className="text-lg font-semibold tracking-tight border-b pb-2"
+					>
+						Web Search
+					</h2>
+					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
+						<WebSearchSettingsPanel />
+					</div>
+				</section>
+
+				{/* Section 4: Chat Assistant Model */}
 				<section className="space-y-4" aria-labelledby="chat-model-heading">
 					<h2
 						id="chat-model-heading"
