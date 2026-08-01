@@ -45,6 +45,14 @@ from server.utils.mermaid_validator import validate_mermaid_code
 logger = logging.getLogger(__name__)
 
 
+from server.schemas.generation import (
+    GenerationBrief,
+    GroundingStatus,
+    SourceCitation,
+)
+from server.services.citation_validation import sanitize_grounded_content
+
+
 class GeneratedContent(BaseModel):
     """Output model for generated educational content."""
 
@@ -64,6 +72,16 @@ class GeneratedContent(BaseModel):
     thinking_content: Optional[str] = Field(
         default=None,
         description="Thinking/reasoning content from models that support it (e.g., Claude)",
+    )
+    citations: List[SourceCitation] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Source citations supporting claims in the content",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Generation or sanitization warnings",
     )
 
 
@@ -242,6 +260,7 @@ class GeneratorAgent(BaseAgent):
     async def generate_explanation(
         self,
         topic: TopicNode,
+        brief: Optional[GenerationBrief] = None,
         prev_summary: Optional[str] = None,
         next_summary: Optional[str] = None,
         llm_context: Optional[LLMContext] = None,
@@ -249,12 +268,12 @@ class GeneratorAgent(BaseAgent):
         """
         Generate educational content for a topic with context injection.
 
-        Injects context from adjacent topics to maintain narrative coherence
-        across the learning path. The prev_summary helps bridge from prior
-        knowledge, while next_summary enables foreshadowing.
+        Injects context from adjacent topics and generation brief to maintain
+        narrative coherence across the learning path.
 
         Args:
             topic: The TopicNode to generate content for
+            brief: Optional GenerationBrief specifying detailed requirements
             prev_summary: Summary of the previous topic (None if first topic)
             next_summary: Summary of the next topic (None if last topic)
             llm_context: Optional OpenRouter context
@@ -265,15 +284,16 @@ class GeneratorAgent(BaseAgent):
         Raises:
             Exception: If generation fails after retries
         """
-        # Build the user message with context injection
         user_message = self._build_user_message(
-            topic, prev_summary, next_summary
+            topic, brief, prev_summary, next_summary
         )
 
         logger.info(
             f"GeneratorAgent generating content for topic {topic.index}: "
             f"'{topic.title}'"
         )
+
+        approved_source_ids = brief.approved_source_ids if brief else set()
 
         max_attempts = 3
         current_attempt = 1
@@ -287,10 +307,10 @@ class GeneratorAgent(BaseAgent):
                 llm_context=llm_context,
             )
 
+            # Check Mermaid syntax
             mermaid_blocks = re.findall(
                 r"```mermaid\s*\n(.*?)\n```", content.content_markdown, re.DOTALL
             )
-
             invalid_block_err = None
             for idx, block in enumerate(mermaid_blocks):
                 err = validate_mermaid_code(block)
@@ -298,61 +318,95 @@ class GeneratorAgent(BaseAgent):
                     invalid_block_err = f"Mermaid Block #{idx + 1} is invalid: {err}"
                     break
 
-            if not invalid_block_err:
-                logger.info(
-                    f"GeneratorAgent created content for '{topic.title}' "
-                    f"with {len(content.key_takeaways)} takeaways (attempt {current_attempt})"
+            if invalid_block_err:
+                logger.warning(
+                    f"GeneratorAgent attempt {current_attempt} generated invalid Mermaid syntax: {invalid_block_err}"
                 )
-                return content
+                active_user_message = (
+                    f"{user_message}\n\n"
+                    f"--- RETRY FEEDBACK (ATTEMPT {current_attempt}/{max_attempts}) ---\n"
+                    f"Your previous response had a Mermaid diagram rendering/parsing error:\n"
+                    f"{invalid_block_err}\n\n"
+                    f"Please correct the Mermaid diagram syntax and regenerate."
+                )
+                last_error = invalid_block_err
+                current_attempt += 1
+                continue
 
-            logger.warning(
-                f"GeneratorAgent attempt {current_attempt} generated invalid Mermaid syntax: {invalid_block_err}"
+            # Check citations against approved_source_ids & web links
+            invalid_citations = [
+                cite for cite in content.citations if cite.source_id not in approved_source_ids
+            ]
+            has_web_links = bool(re.search(r"https?://\S+", content.content_markdown))
+
+            if (invalid_citations or has_web_links) and current_attempt == 1:
+                logger.warning(
+                    "GeneratorAgent generated unapproved citations/links on attempt 1. Requesting correction."
+                )
+                active_user_message = (
+                    f"{user_message}\n\n"
+                    f"--- RETRY FEEDBACK (ATTEMPT {current_attempt}/{max_attempts}) ---\n"
+                    f"Your response included unsupported citations or web URLs.\n"
+                    f"Approved source IDs: {sorted(list(approved_source_ids))}\n"
+                    f"You MUST NOT include raw HTTP/HTTPS URLs. Return citations as SourceCitation objects using ONLY approved source IDs.\n"
+                )
+                current_attempt += 1
+                continue
+
+            # If still invalid or attempt > 1, sanitize and proceed
+            cleaned_markdown, valid_citations, warnings = sanitize_grounded_content(
+                markdown=content.content_markdown,
+                citations=content.citations,
+                approved_source_ids=approved_source_ids,
             )
 
-            # Prepare feedback message for the next attempt
-            active_user_message = (
-                f"{user_message}\n\n"
-                f"--- RETRY FEEDBACK (ATTEMPT {current_attempt}/{max_attempts}) ---\n"
-                f"Your previous response had a Mermaid diagram rendering/parsing error:\n"
-                f"{invalid_block_err}\n\n"
-                f"Please correct the Mermaid diagram syntax. Make sure:\n"
-                f"1. You do not define two nodes on the same line without a connector/arrow or newline.\n"
-                f"2. Every node definition has valid opening and closing shapes (e.g. `A[\"Label\"] --> B[\"Label\"]`).\n"
-                f"3. You do not place double quotes inside double-quoted labels (use single quotes internally instead, e.g. `A[\"Can 'see' context\"]`).\n"
-                f"Please regenerate the entire response with the corrected content."
-            )
+            all_warnings = list(content.warnings)
+            for w in warnings:
+                if w not in all_warnings:
+                    all_warnings.append(w)
 
-            last_error = invalid_block_err
-            current_attempt += 1
+            return content.model_copy(
+                update={
+                    "content_markdown": cleaned_markdown,
+                    "citations": valid_citations,
+                    "warnings": all_warnings,
+                }
+            )
 
         logger.error(
-            f"GeneratorAgent failed to generate valid Mermaid diagram after {max_attempts} attempts. Last error: {last_error}"
+            f"GeneratorAgent failed after {max_attempts} attempts. Last error: {last_error}"
         )
         return content
 
     def _build_user_message(
         self,
         topic: TopicNode,
+        brief: Optional[GenerationBrief],
         prev_summary: Optional[str],
         next_summary: Optional[str],
     ) -> str:
-        """
-        Build the user message with context injection from adjacent topics.
-
-        Args:
-            topic: The TopicNode to generate content for
-            prev_summary: Summary of the previous topic
-            next_summary: Summary of the next topic
-
-        Returns:
-            Formatted user message with context injected
-        """
+        """Build user message with topic, brief, and adjacent context."""
         parts = [
             f"Create educational content for the following topic:\n",
             f"## Topic: {topic.title}",
             f"**Summary**: {topic.summary_for_context}",
             f"**Key Terms to Emphasize**: {', '.join(topic.key_terms)}",
         ]
+
+        if brief:
+            parts.append("\n## Generation Brief")
+            parts.append(f"- **Scope**: {brief.topic_scope}")
+            parts.append(f"- **Objectives**: {', '.join(brief.learning_objectives)}")
+            parts.append(f"- **Pedagogical Guidance**: {brief.pedagogical_guidance}")
+            if brief.source_excerpts:
+                parts.append("\n### Approved Research Source Excerpts")
+                parts.append("<UNTRUSTED_RESEARCH_EXCERPTS>")
+                for exc in brief.source_excerpts:
+                    parts.append(f"Source [{exc.source_id}]: {exc.excerpt}")
+                parts.append("</UNTRUSTED_RESEARCH_EXCERPTS>")
+                parts.append(
+                    f"Citations MUST use source_id values from approved list: {sorted(list(brief.approved_source_ids))}. Do NOT invent URLs or links."
+                )
 
         # Context injection section
         parts.append("\n## Adjacent Topic Context")

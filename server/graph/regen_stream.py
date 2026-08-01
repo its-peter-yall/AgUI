@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 
 from server.agents.generator import GeneratedContent, generator_agent
 from server.agents.quizzer import quizzer_agent
+from server.database.generation_artifacts import generation_artifact_store
 from server.database.learning_persistence import learning_manager
 from server.schemas.learning import FailedStep, NodeStatus, QuizSet, TopicNode
 from server.schemas.llm import LLMContext
@@ -123,9 +124,11 @@ async def stream_regenerate_node_generator(
         new_content_markdown = node.get("content_markdown") or ""
         new_quiz_set: Optional[QuizSet] = None
 
+        brief = generation_artifact_store.get_brief(node_id)
+
         if run_generator:
             user_message = generator_agent._build_user_message(
-                topic, prev_summary, next_summary
+                topic, brief, prev_summary, next_summary
             )
             full_system_prompt = generator_agent._build_system_prompt()
             messages = [
@@ -204,6 +207,7 @@ async def stream_regenerate_node_generator(
                 topic=topic,
                 content=new_content_markdown,
                 quiz_count=quiz_count,
+                brief=brief,
                 llm_context=llm_context,
             )
 

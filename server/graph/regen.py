@@ -40,6 +40,9 @@ from server.schemas.llm import LLMContext
 logger = logging.getLogger(__name__)
 
 
+from server.database.generation_artifacts import generation_artifact_store
+
+
 async def regenerate_failed_node(
     node_id: str,
     llm_context: Optional[LLMContext] = None,
@@ -125,6 +128,8 @@ async def regenerate_failed_node(
         quiz_count=quiz_count,
     )
 
+    brief = generation_artifact_store.get_brief(node_id)
+
     new_content_markdown = node.get("content_markdown") or ""
     new_quiz_set: Optional[QuizSet] = None
     run_generator = target_step in {
@@ -141,6 +146,7 @@ async def regenerate_failed_node(
         content: GeneratedContent = (
             await generator_agent.generate_explanation(
                 topic=topic,
+                brief=brief,
                 prev_summary=prev_summary,
                 next_summary=next_summary,
                 llm_context=llm_context,
@@ -153,6 +159,7 @@ async def regenerate_failed_node(
             topic=topic,
             content=new_content_markdown,
             quiz_count=quiz_count,
+            brief=brief,
             llm_context=llm_context,
         )
 
@@ -255,9 +262,12 @@ async def regenerate_topic_node(
         quiz_count=quiz_count,
     )
 
+    brief = generation_artifact_store.get_brief(node_id)
+
     content: GeneratedContent = (
         await generator_agent.generate_explanation(
             topic=topic,
+            brief=brief,
             prev_summary=prev_summary,
             next_summary=next_summary,
             llm_context=llm_context,
@@ -269,6 +279,7 @@ async def regenerate_topic_node(
         topic=topic,
         content=new_content_markdown,
         quiz_count=quiz_count,
+        brief=brief,
         llm_context=llm_context,
     )
 

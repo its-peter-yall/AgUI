@@ -192,6 +192,9 @@ Option D (DISTRACTOR - Misconception: Partial understanding):
 Remember: Your quiz questions directly impact learning outcomes. Every distractor should teach something when explained."""
 
 
+from server.schemas.generation import GenerationBrief
+
+
 class QuizzerAgent(BaseAgent):
     """
     Quizzer Agent for generating retrieval-based assessment questions.
@@ -334,6 +337,7 @@ class QuizzerAgent(BaseAgent):
         topic: TopicNode,
         content: str,
         quiz_count: int,
+        brief: Optional[GenerationBrief] = None,
     ) -> str:
         """Build prompt for batch quiz generation with a difficulty gradient."""
         bounded_quiz_count = max(1, min(5, quiz_count))
@@ -343,6 +347,18 @@ class QuizzerAgent(BaseAgent):
             f"Q{i + 1}={difficulty}" for i, difficulty in enumerate(difficulty_sequence)
         )
 
+        brief_section = ""
+        if brief:
+            targets_str = ", ".join(brief.quiz_learning_targets)
+            evidence_str = ", ".join(brief.expected_learner_evidence)
+            misconceptions_str = ", ".join(brief.common_misconceptions)
+            brief_section = (
+                f"\n## Brief Assessment Guidance\n"
+                f"- **Quiz Learning Targets**: {targets_str}\n"
+                f"- **Expected Learner Evidence**: {evidence_str}\n"
+                f"- **Target Misconceptions**: {misconceptions_str}\n"
+            )
+
         return f"""Generate a complete quiz set for the following topic and content.
 
 ## Topic Information
@@ -350,7 +366,7 @@ class QuizzerAgent(BaseAgent):
 - **Index in Learning Path**: {topic.index}
 - **Summary**: {topic.summary_for_context}
 - **Key Terms**: {key_terms_str}
-
+{brief_section}
 ## Content to Test
 {content}
 
@@ -367,6 +383,7 @@ class QuizzerAgent(BaseAgent):
         self,
         topic: TopicNode,
         content: str,
+        brief: Optional[GenerationBrief] = None,
         context: Optional[dict] = None,
         llm_context: Optional[LLMContext] = None,
     ) -> QuizCard:
@@ -380,6 +397,7 @@ class QuizzerAgent(BaseAgent):
         Args:
             topic: TopicNode containing title, summary, and key terms
             content: Generated markdown content for the topic
+            brief: Optional GenerationBrief with assessment targets
             context: Optional additional context for prompt augmentation
             llm_context: Optional OpenRouter context
 
@@ -389,10 +407,7 @@ class QuizzerAgent(BaseAgent):
         Raises:
             Exception: If generation fails after retries
         """
-        # Build the user message with topic details and content
-        user_message = self._build_user_message(topic, content)
-
-        # Merge topic context with any provided context
+        user_message = self._build_user_message(topic, content, brief=brief)
         full_context = self._build_topic_context(topic, context)
 
         logger.info(
@@ -407,7 +422,6 @@ class QuizzerAgent(BaseAgent):
             llm_context=llm_context,
         )
 
-        # Convert LLM output to storage schema with backend-generated UUIDs
         quiz = convert_llm_to_quiz_card(quiz)
 
         logger.info(
@@ -422,6 +436,7 @@ class QuizzerAgent(BaseAgent):
         topic: TopicNode,
         content: str,
         quiz_count: int,
+        brief: Optional[GenerationBrief] = None,
         context: Optional[dict] = None,
         llm_context: Optional[LLMContext] = None,
     ) -> QuizSet:
@@ -430,13 +445,14 @@ class QuizzerAgent(BaseAgent):
             single_quiz = await self.generate_quiz(
                 topic=topic,
                 content=content,
+                brief=brief,
                 context=context,
                 llm_context=llm_context,
             )
             return QuizSet(quizzes=[single_quiz], current_index=0)
 
         user_message = self._build_batch_user_message(
-            topic, content, quiz_count
+            topic, content, quiz_count, brief=brief
         )
         full_context = self._build_topic_context(topic, context)
 
@@ -447,7 +463,6 @@ class QuizzerAgent(BaseAgent):
             llm_context=llm_context,
         )
 
-        # Convert LLM output to storage schema with backend-generated UUIDs
         quiz_set = convert_llm_to_quiz_set(quiz_set)
         quiz_set = self._enforce_quiz_count(quiz_set, quiz_count)
 
@@ -465,22 +480,25 @@ class QuizzerAgent(BaseAgent):
 
         return quiz_set
 
-
-    def _build_user_message(self, topic: TopicNode, content: str) -> str:
-        """
-        Build the user message for quiz generation.
-
-        Combines topic metadata and content into a structured prompt
-        that guides the model to create an effective quiz question.
-
-        Args:
-            topic: TopicNode with title, summary, and key terms
-            content: Generated markdown content for the topic
-
-        Returns:
-            Formatted user message string
-        """
+    def _build_user_message(
+        self,
+        topic: TopicNode,
+        content: str,
+        brief: Optional[GenerationBrief] = None,
+    ) -> str:
+        """Build user message for single quiz generation."""
         key_terms_str = ", ".join(topic.key_terms)
+        brief_section = ""
+        if brief:
+            targets_str = ", ".join(brief.quiz_learning_targets)
+            evidence_str = ", ".join(brief.expected_learner_evidence)
+            misconceptions_str = ", ".join(brief.common_misconceptions)
+            brief_section = (
+                f"\n## Brief Assessment Guidance\n"
+                f"- **Quiz Learning Targets**: {targets_str}\n"
+                f"- **Expected Learner Evidence**: {evidence_str}\n"
+                f"- **Target Misconceptions**: {misconceptions_str}\n"
+            )
 
         return f"""Generate a diagnostic quiz question for the following topic and content.
 
@@ -489,7 +507,7 @@ class QuizzerAgent(BaseAgent):
 - **Index in Learning Path**: {topic.index}
 - **Summary**: {topic.summary_for_context}
 - **Key Terms**: {key_terms_str}
-
+{brief_section}
 ## Content to Test
 {content}
 
