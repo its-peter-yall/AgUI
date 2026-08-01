@@ -34,9 +34,13 @@ from server.schemas.generation import (
     GENERATION_MAX_CONCURRENCY,
     GenerationStage,
 )
-from server.schemas.progress import ProgressEventType
-from server.schemas.llm import LLMContext
-from server.schemas.search import SearchContext
+from server.schemas.progress import (
+    GenerationCancelledPayload,
+    GenerationPausedPayload,
+    ProgressEventType,
+    StageChangedPayload,
+)
+from server.schemas.generation import GenerationWarning
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +148,8 @@ async def run_generation_job(
         try:
             es.append_once(
                 session_id=session_id,
-                event_type=ProgressEventType.STAGE_CHANGED,
-                stage=GenerationStage.CANCELLED,
-                message="Generation cancelled by user",
+                event_type=ProgressEventType.GENERATION_CANCELLED,
+                payload=GenerationCancelledPayload(stage=GenerationStage.CANCELLED),
             )
         except Exception:
             pass
@@ -157,9 +160,11 @@ async def run_generation_job(
         try:
             es.append_once(
                 session_id=session_id,
-                event_type=ProgressEventType.STAGE_CHANGED,
-                stage=GenerationStage.PAUSED,
-                message=str(exc),
+                event_type=ProgressEventType.GENERATION_PAUSED,
+                payload=GenerationPausedPayload(
+                    stage=GenerationStage.PAUSED,
+                    warning=GenerationWarning(code="resumable_error", message=str(exc)),
+                ),
             )
         except Exception:
             pass
@@ -171,9 +176,13 @@ async def run_generation_job(
             es.append_once(
                 session_id=session_id,
                 event_type=ProgressEventType.STAGE_CHANGED,
-                stage=GenerationStage.FAILED,
-                message=str(exc),
+                payload=StageChangedPayload(
+                    previous_stage=GenerationStage.INITIALIZING,
+                    stage=GenerationStage.FAILED,
+                ),
             )
+        except Exception:
+            pass
         except Exception:
             pass
 

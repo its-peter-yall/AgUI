@@ -69,7 +69,7 @@ from server.schemas.generation import (
     GroundingStatus,
 )
 from server.schemas.learning import CourseOutline, FailedStep, NodeStatus, QuizSet, TopicNode
-from server.schemas.progress import ProgressEventType
+from server.schemas.progress import ProgressEventType, StageChangedPayload
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
 from server.services.research_runner import run_research
@@ -179,8 +179,10 @@ async def initialize_generation_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=next_stage,
-        message=f"Initialized course generation (mode={resolved_mode}, web={web_enabled})",
+        payload=StageChangedPayload(
+            previous_stage=GenerationStage.INITIALIZING,
+            stage=next_stage,
+        ),
     )
 
     return {
@@ -229,8 +231,10 @@ async def researcher_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=GenerationStage.OUTLINING,
-        message="Research complete, proceeding to outline planning",
+        payload=StageChangedPayload(
+            previous_stage=GenerationStage.RESEARCHING,
+            stage=GenerationStage.OUTLINING,
+        ),
     )
 
     return {
@@ -269,8 +273,10 @@ async def outline_planner_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=GenerationStage.PLANNING_PREVIEW,
-        message=f"Outline created with {len(outline.topics)} topics",
+        payload=StageChangedPayload(
+            previous_stage=GenerationStage.OUTLINING,
+            stage=GenerationStage.PLANNING_PREVIEW,
+        ),
     )
 
     return {
@@ -298,8 +304,10 @@ async def plan_brief_batch_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=stage_plan,
-        message=f"Planning briefs for topics {batch.start} to {batch.start + batch.size - 1}",
+        payload=StageChangedPayload(
+            previous_stage=GenerationStage.OUTLINING if batch.start == 0 else GenerationStage.PLANNING_BATCH,
+            stage=stage_plan,
+        ),
     )
 
     outline = generation_artifact_store.get_outline(session_id)
@@ -341,8 +349,10 @@ async def plan_brief_batch_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=stage_gen,
-        message=f"Generating content for batch starting at {batch.start}",
+        payload=StageChangedPayload(
+            previous_stage=stage_plan,
+            stage=stage_gen,
+        ),
     )
 
     return {
@@ -609,8 +619,10 @@ async def finalize_generation_node(
     progress_event_store.append_once(
         session_id=session_id,
         event_type=ProgressEventType.STAGE_CHANGED,
-        stage=final_stage,
-        message=f"Course generation completed ({final_stage.value})",
+        payload=StageChangedPayload(
+            previous_stage=GenerationStage.GENERATING_BATCH,
+            stage=final_stage,
+        ),
     )
 
     logger.info("Generation job finalized for session %s with stage %s", session_id, final_stage.value)

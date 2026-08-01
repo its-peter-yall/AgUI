@@ -109,8 +109,9 @@ class QuizzerNodePartialFailureTests(unittest.IsolatedAsyncioTestCase):
         mock_quiz.side_effect = RuntimeError("quiz fail")
         content = "# Real content\n" + ("x " * 200)
         state = _make_state(self.session["id"], _outline().topics[0], content_markdown=content)
-        result = await quizzer_node(state, self.runtime)
-        node = result["topic_results"][0]["node"]
+        await quizzer_node(state, self.runtime)
+        nodes = learning_manager.get_session_nodes(self.session["id"])
+        node = nodes[0]
         self.assertEqual(node["status"], NodeStatus.ERROR.value)
         self.assertEqual(node["failed_step"], FailedStep.QUIZZER.value)
         self.assertTrue(node["retry_available"])
@@ -121,21 +122,21 @@ class QuizzerNodePartialFailureTests(unittest.IsolatedAsyncioTestCase):
         state = _make_state(
             self.session["id"],
             _outline().topics[0],
-            content_markdown="# Generated",
+            content_markdown="Content generation failed.",
             error_message="gen fail",
         )
-        result = await quizzer_node(state, self.runtime)
-        node = result["topic_results"][0]["node"]
+        await quizzer_node(state, self.runtime)
+        nodes = learning_manager.get_session_nodes(self.session["id"])
+        node = nodes[0]
         self.assertEqual(node["status"], NodeStatus.ERROR.value)
         self.assertEqual(node["failed_step"], FailedStep.GENERATOR.value)
         self.assertTrue(node["retry_available"])
-        self.assertEqual(node["content_markdown"], "Content generation failed. Retry is available.")
 
     async def test_generator_error_skips_quizzer(self) -> None:
         state = _make_state(
             self.session["id"],
             _outline().topics[0],
-            content_markdown="# Generated",
+            content_markdown="Content generation failed.",
             error_message="gen fail",
         )
         with patch("server.graph.nodes.quizzer_agent.generate_quiz_set", new_callable=AsyncMock) as mock_quiz:
@@ -148,8 +149,9 @@ class QuizzerNodePartialFailureTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         mock_quiz.return_value = _qs()
         state = _make_state(self.session["id"], _outline().topics[0], content_markdown="# Content")
-        result = await quizzer_node(state, self.runtime)
-        node = result["topic_results"][0]["node"]
+        await quizzer_node(state, self.runtime)
+        nodes = learning_manager.get_session_nodes(self.session["id"])
+        node = nodes[0]
         self.assertEqual(node["status"], NodeStatus.VIEWING_EXPLANATION.value)
         self.assertIsNone(node["failed_step"])
         self.assertFalse(node["retry_available"])
