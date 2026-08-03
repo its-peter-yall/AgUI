@@ -40,11 +40,13 @@ import {
 	ChevronDown,
 	ArrowLeft,
 	MessageCircle,
+	Bot,
 } from "lucide-react";
 
 import { useTheme } from "@/hooks/useTheme";
 import { OpenRouterSettingsPanel } from "./OpenRouterSettingsPanel";
 import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel";
+import { AgentModelsPanel } from "./AgentModelsPanel";
 import { ModelPicker } from "./ModelPicker";
 import { getProviderSettings, setProviderConfig } from "@/lib/providerSettings";
 import type { AIProvider } from "@/types/provider";
@@ -53,6 +55,7 @@ import { cn } from "@/lib/utils";
 type SettingsSectionKey =
 	| "appearance"
 	| "ai-provider"
+	| "agent-models"
 	| "web-search"
 	| "chat-model";
 
@@ -114,6 +117,7 @@ export function SettingsPage() {
 	>({
 		appearance: false,
 		"ai-provider": false,
+		"agent-models": false,
 		"web-search": false,
 		"chat-model": false,
 	});
@@ -286,7 +290,25 @@ export function SettingsPage() {
 					</div>
 				</SettingsSection>
 
-				{/* Section 3: Web Search */}
+				{/* Section 3: Agent Models */}
+				<SettingsSection
+					headingId="agent-models-heading"
+					contentId="agent-models-content"
+					title={
+						<span className="flex items-center gap-2">
+							<Bot aria-hidden="true" className="h-5 w-5 text-[#ffb74d]" />
+							Agent Models
+						</span>
+					}
+					isExpanded={expandedSections["agent-models"]}
+					onToggle={() => toggleSection("agent-models")}
+				>
+					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
+						<AgentModelsPanel />
+					</div>
+				</SettingsSection>
+
+				{/* Section 4: Web Search */}
 				<SettingsSection
 					headingId="web-search-heading"
 					contentId="web-search-content"
@@ -299,7 +321,7 @@ export function SettingsPage() {
 					</div>
 				</SettingsSection>
 
-				{/* Section 4: Chat Assistant Model */}
+				{/* Section 5: Chat Assistant Model */}
 				<SettingsSection
 					headingId="chat-model-heading"
 					contentId="chat-model-content"

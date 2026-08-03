@@ -37,6 +37,10 @@ vi.mock('./WebSearchSettingsPanel', () => ({
   WebSearchSettingsPanel: () => <div>Web search panel content</div>,
 }));
 
+vi.mock('./AgentModelsPanel', () => ({
+  AgentModelsPanel: () => <div>Agent models panel content</div>,
+}));
+
 vi.mock('./ModelPicker', () => ({
   ModelPicker: () => <div>Model picker content</div>,
 }));
@@ -57,6 +61,7 @@ describe('SettingsPage', () => {
       'Appearance',
       'AI Provider Credentials',
       'Web Search',
+      'Agent Models',
       'Chat Assistant Model',
     ]) {
       expect(screen.getByRole('button', { name })).toHaveAttribute(

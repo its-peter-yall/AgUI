@@ -213,6 +213,11 @@ export function OpenRouterSettingsPanel() {
     <div className="w-full flex flex-col gap-6">
       {/* Top Model Dropdown Selector */}
       <div className="bg-card border border-border p-5 rounded-2xl shadow-sm relative z-30">
+        <p className="text-xs text-muted-foreground mb-3">
+          Default / Depth Router Model — used for depth routing and as the
+          active provider default. Not a substitute for Researcher, Planner,
+          Generator, or Quizzer models below.
+        </p>
         <ModelPicker
           openRouterKey={openrouterConfig.apiKey}
           generalComputeKey={generalcomputeConfig.apiKey}
