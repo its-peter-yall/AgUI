@@ -225,6 +225,51 @@ class StorageRouterTests(unittest.TestCase):
             {"masterEnabled": False},
         )
 
+    def test_cloud_mutation_guard_matrix(self) -> None:
+        client = make_client(make_connected_cloud_storage())
+        cases = (
+            ("/settings/storage/connect", {"uri": "mongodb://x", "dbName": "d"}),
+            ("/settings/storage/disconnect", None),
+            (
+                "/settings/storage/migrate",
+                {"providerSettings": {}, "webSearchSettings": {}},
+            ),
+        )
+        for path, payload in cases:
+            with self.subTest(path=path):
+                response = client.post(path, json=payload)
+                self.assertEqual(response.status_code, 403)
+
+    def test_cloud_app_settings_remain_read_write(self) -> None:
+        client = make_client(make_connected_cloud_storage())
+        self.assertEqual(
+            client.get("/settings/storage/app-settings").status_code,
+            200,
+        )
+        self.assertEqual(
+            client.put(
+                "/settings/storage/app-settings",
+                json={"providerSettings": {}, "webSearchSettings": {}},
+            ).status_code,
+            200,
+        )
+
+    def test_status_and_errors_never_return_uri_or_password(self) -> None:
+        storage = make_connected_cloud_storage()
+        storage.mongo_uri = "mongodb://user:secret@host"
+        response = make_client(storage).get("/settings/storage/status")
+        body = response.text
+        self.assertNotIn("secret", body)
+        self.assertNotIn("mongodb://", body)
+
+
+def make_connected_cloud_storage() -> SimpleNamespace:
+    storage = make_connected_storage()
+    storage.deployment_mode = DeploymentMode.CLOUD
+    storage.app_settings.get_provider_settings.return_value = {}
+    storage.app_settings.get_web_search_settings.return_value = {}
+    return storage
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -137,11 +137,21 @@ async def connect_storage(
             payload.db_name,
         )
     except MongoConfigurationError as exc:
+        logger.error(
+            "Mongo operation failed operation=%s error=%s",
+            "connect",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MongoDB connection is invalid or unauthorized",
         ) from exc
     except MongoUnavailableError as exc:
+        logger.error(
+            "Mongo operation failed operation=%s error=%s",
+            "connect",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="MongoDB is unreachable",
@@ -238,6 +248,11 @@ async def migrate_storage(
             web_search_settings=payload.web_search_settings,
         )
     except MigrationError as exc:
+        logger.error(
+            "Mongo operation failed operation=%s error=%s",
+            "migrate",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
