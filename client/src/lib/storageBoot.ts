@@ -103,7 +103,9 @@ function startCloudSettingsSync(): void {
       webSearchSettings: getWebSearchSettings(),
     };
     queue = queue
-      .then(() => putAppSettings(snapshot))
+      .then(async () => {
+        await putAppSettings(snapshot);
+      })
       .catch(() => undefined);
   };
   window.addEventListener(APP_SETTINGS_CHANGED_EVENT, listener);

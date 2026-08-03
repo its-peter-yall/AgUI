@@ -25,7 +25,7 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import axios from 'axios';
+import axios, { type AxiosError } from 'axios';
 
 const getStorageStatusMock = vi.fn();
 const connectStorageMock = vi.fn();
@@ -279,7 +279,7 @@ describe('StorageSettingsPanel', () => {
       }),
     );
     vi.spyOn(axios, 'isAxiosError').mockImplementation(
-      (error: unknown): error is axios.AxiosError =>
+      (error: unknown): error is AxiosError =>
         Boolean(
           error &&
             typeof error === 'object' &&
