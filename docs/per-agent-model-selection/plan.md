@@ -55,7 +55,7 @@
 - Modify: `client/src/types/provider.ts`
 - Modify: `client/src/lib/providerSettings.ts` (interface only in this task if preferred; types may live next to `ProviderConfig`)
 
-- [ ] **Step 1: Add types to `client/src/types/provider.ts`**
+- [x] **Step 1: Add types to `client/src/types/provider.ts`**
 
 Append after `ThinkingConfig`:
 
@@ -79,7 +79,7 @@ export interface AgentModelSelection {
 }
 ```
 
-- [ ] **Step 2: Extend `ProviderConfig` in `client/src/lib/providerSettings.ts`**
+- [x] **Step 2: Extend `ProviderConfig` in `client/src/lib/providerSettings.ts`**
 
 ```ts
 import type {
@@ -102,7 +102,7 @@ export interface ProviderConfig {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add client/src/types/provider.ts client/src/lib/providerSettings.ts
@@ -117,7 +117,7 @@ git commit -m "feat(agent-models): add AgentRole and AgentModelSelection types"
 - Modify: `client/src/lib/providerSettings.ts`
 - Modify: `client/src/lib/providerSettings.test.ts`
 
-- [ ] **Step 1: Write failing tests** in `providerSettings.test.ts`
+- [x] **Step 1: Write failing tests** in `providerSettings.test.ts`
 
 ```ts
 import {
@@ -225,7 +225,7 @@ describe('agent model settings', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests — expect FAIL**
+- [x] **Step 2: Run tests — expect FAIL**
 
 ```bash
 cd client
@@ -234,7 +234,7 @@ npm run test -- --run src/lib/providerSettings.test.ts
 
 Expected: FAIL — `areAgentModelsConfigured` / `setAgentModelSelection` not defined.
 
-- [ ] **Step 3: Implement helpers + load/save**
+- [x] **Step 3: Implement helpers + load/save**
 
 Add near other exports in `providerSettings.ts`:
 
@@ -360,14 +360,14 @@ agentModels: parseAgentModels(
 
 `setProviderConfig` already shallow-merges; ensure callers replace full `agentModels` map (as `setAgentModelSelection` does).
 
-- [ ] **Step 4: Run tests — expect PASS**
+- [x] **Step 4: Run tests — expect PASS**
 
 ```bash
 cd client
 npm run test -- --run src/lib/providerSettings.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add client/src/lib/providerSettings.ts client/src/lib/providerSettings.test.ts client/src/types/provider.ts
@@ -384,7 +384,7 @@ git commit -m "feat(agent-models): persist agentModels and configuration helpers
 - Modify: `client/src/features/settings/OpenRouterSettingsPanel.tsx`
 - Modify: `client/src/features/settings/SettingsPage.tsx` (chat copy stays; only main model if any label there)
 
-- [ ] **Step 1: Find main model label area** in `OpenRouterSettingsPanel.tsx` above `ModelPicker` (or add a short help line if none).
+- [x] **Step 1: Find main model label area** in `OpenRouterSettingsPanel.tsx` above `ModelPicker` (or add a short help line if none).
 
 Add/replace help text immediately above the top `ModelPicker`:
 
@@ -398,7 +398,7 @@ Add/replace help text immediately above the top `ModelPicker`:
 
 Do **not** change Chat Assistant Model section copy or behavior.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add client/src/features/settings/OpenRouterSettingsPanel.tsx
@@ -415,7 +415,7 @@ git commit -m "docs(ui): relabel main model as Default / Depth Router"
 - Modify: `client/src/features/settings/SettingsPage.tsx`
 - Modify: `client/src/features/settings/SettingsPage.test.tsx`
 
-- [ ] **Step 1: Write failing SettingsPage disclosure test**
+- [x] **Step 1: Write failing SettingsPage disclosure test**
 
 In `SettingsPage.test.tsx`, extend the collapsed-sections list:
 
@@ -437,14 +437,14 @@ vi.mock('./AgentModelsPanel', () => ({
 }));
 ```
 
-- [ ] **Step 2: Run test — expect FAIL** (no Agent Models button)
+- [x] **Step 2: Run test — expect FAIL** (no Agent Models button)
 
 ```bash
 cd client
 npm run test -- --run src/features/settings/SettingsPage.test.tsx
 ```
 
-- [ ] **Step 3: Write AgentModelsPanel tests**
+- [x] **Step 3: Write AgentModelsPanel tests**
 
 ```tsx
 /**
@@ -537,7 +537,7 @@ describe('AgentModelsPanel', () => {
 });
 ```
 
-- [ ] **Step 4: Implement `AgentModelsPanel.tsx`**
+- [x] **Step 4: Implement `AgentModelsPanel.tsx`**
 
 ```tsx
 /**
@@ -732,7 +732,7 @@ const supportsThinking =
   (orModels?.find((m) => m.id === sel.modelId)?.supports_thinking ?? false);
 ```
 
-- [ ] **Step 5: Wire SettingsPage**
+- [x] **Step 5: Wire SettingsPage**
 
 Extend section key union:
 
@@ -777,7 +777,7 @@ import { AgentModelsPanel } from './AgentModelsPanel';
 </SettingsSection>
 ```
 
-- [ ] **Step 6: Run UI tests**
+- [x] **Step 6: Run UI tests**
 
 ```bash
 cd client
@@ -786,7 +786,7 @@ npm run test -- --run src/features/settings/SettingsPage.test.tsx src/features/s
 
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add client/src/features/settings/AgentModelsPanel.tsx \
@@ -807,7 +807,7 @@ git commit -m "feat(agent-models): Settings Agent Models section with four picke
 - Create: `client/src/lib/agentModelHeaders.ts`
 - Create: `client/src/lib/agentModelHeaders.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 /**
@@ -892,14 +892,14 @@ describe('buildAgentModelHeaders', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
+- [x] **Step 2: Run — expect FAIL**
 
 ```bash
 cd client
 npm run test -- --run src/lib/agentModelHeaders.test.ts
 ```
 
-- [ ] **Step 3: Implement `agentModelHeaders.ts`**
+- [x] **Step 3: Implement `agentModelHeaders.ts`**
 
 ```ts
 /**
@@ -983,9 +983,9 @@ export function buildAgentModelHeaders(
 }
 ```
 
-- [ ] **Step 4: Run tests — PASS**
+- [x] **Step 4: Run tests — PASS**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add client/src/lib/agentModelHeaders.ts client/src/lib/agentModelHeaders.test.ts
@@ -1001,7 +1001,7 @@ git commit -m "feat(agent-models): centralize agent role HTTP headers"
 - Modify: `client/src/lib/learningApi.test.ts`
 - Modify: `client/src/lib/regenApi.ts`
 
-- [ ] **Step 1: Extend learningApi tests**
+- [x] **Step 1: Extend learningApi tests**
 
 Update mock `getProviderSettings` to include full `agentModels` for four roles. Add:
 
@@ -1020,7 +1020,7 @@ it('generate attaches per-role agent model headers', async () => {
 
 Also cover `regenerateNode` if tested, or add a small case.
 
-- [ ] **Step 2: Replace `buildLlmHeaders` in `learningApi.ts`**
+- [x] **Step 2: Replace `buildLlmHeaders` in `learningApi.ts`**
 
 ```ts
 import { getProviderSettings, getWebSearchSettings } from './providerSettings';
@@ -1038,7 +1038,7 @@ function buildLlmHeaders(): Record<string, string> {
 
 Note: `generateCourse` / `resumeGeneration` / `regenerateNode` already use `buildLlmHeaders()`. Incomplete agent config will throw — CTAs should be disabled first (Task 7); still safe.
 
-- [ ] **Step 3: Update `regenApi.ts` `streamRegenerateNode`**
+- [x] **Step 3: Update `regenApi.ts` `streamRegenerateNode`**
 
 ```ts
 import { getProviderSettings } from './providerSettings';
@@ -1051,14 +1051,14 @@ const providerHeaders = buildAgentModelHeaders(settings);
 
 Remove direct `buildProviderHeaders` usage here.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 cd client
 npm run test -- --run src/lib/learningApi.test.ts src/lib/agentModelHeaders.test.ts
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add client/src/lib/learningApi.ts client/src/lib/learningApi.test.ts client/src/lib/regenApi.ts
@@ -1077,7 +1077,7 @@ git commit -m "feat(agent-models): send per-role headers on generate/resume/rege
 - Modify: `client/src/features/learning/ConceptCard.tsx`
 - Related tests as needed
 
-- [ ] **Step 1: TopicInput gate**
+- [x] **Step 1: TopicInput gate**
 
 ```ts
 import {
@@ -1105,9 +1105,9 @@ Use `canStart` everywhere `hasApiKey` currently gates generate UI. Add message w
 
 Keep existing API key message when `!hasApiKey`.
 
-- [ ] **Step 2: TopicInput tests** — mock settings without agentModels → Learn disabled; with all four → enabled (when key + query present).
+- [x] **Step 2: TopicInput tests** — mock settings without agentModels → Learn disabled; with all four → enabled (when key + query present).
 
-- [ ] **Step 3: GenerationStatusPanel** — add prop:
+- [x] **Step 3: GenerationStatusPanel** — add prop:
 
 ```ts
 canResumeAgents?: boolean; // default true for back-compat in tests
@@ -1119,7 +1119,7 @@ disabled={pending || canResumeAgents === false}
 
 Show small hint when `canResumeAgents === false`.
 
-- [ ] **Step 4: LearningPage** — compute `agentsReady` from `getProviderSettings()` and pass to panel; guard `resumeMutation.mutationFn` early:
+- [x] **Step 4: LearningPage** — compute `agentsReady` from `getProviderSettings()` and pass to panel; guard `resumeMutation.mutationFn` early:
 
 ```ts
 if (!areAgentModelsConfigured(
@@ -1131,7 +1131,7 @@ if (!areAgentModelsConfigured(
 }
 ```
 
-- [ ] **Step 5: ConceptCard regen** — before `streamRegenerateNode`:
+- [x] **Step 5: ConceptCard regen** — before `streamRegenerateNode`:
 
 ```ts
 const settings = getProviderSettings();
@@ -1146,14 +1146,14 @@ if (!areAgentModelsConfigured(cfg)) {
 
 Disable regen buttons when `!areAgentModelsConfigured(...)`.
 
-- [ ] **Step 6: Run affected client tests**
+- [x] **Step 6: Run affected client tests**
 
 ```bash
 cd client
 npm run test -- --run src/features/learning/TopicInput.test.tsx src/features/learning/LearningPage.test.tsx src/features/learning/ConceptCard.test.tsx
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add client/src/features/learning/
@@ -1170,7 +1170,7 @@ git commit -m "feat(agent-models): gate generate/resume/regen on four role model
 - Modify: `server/schemas/llm.py`
 - Create: `server/tests/test_llm_context_agent_models.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 """
@@ -1315,14 +1315,14 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run — expect FAIL**
+- [x] **Step 2: Run — expect FAIL**
 
 ```bash
 cd server
 .venv\Scripts\python -m unittest server.tests.test_llm_context_agent_models
 ```
 
-- [ ] **Step 3: Implement schemas in `server/schemas/llm.py`**
+- [x] **Step 3: Implement schemas in `server/schemas/llm.py`**
 
 Keep 80-char lines. Core additions:
 
@@ -1548,14 +1548,14 @@ return LLMContext(
 
 **Note:** Existing tests construct `LLMContext(api_key=..., model=...)` — new optional fields default empty so they keep working.
 
-- [ ] **Step 4: Run tests — PASS**
+- [x] **Step 4: Run tests — PASS**
 
 ```bash
 cd server
 .venv\Scripts\python -m unittest server.tests.test_llm_context_agent_models
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/schemas/llm.py server/tests/test_llm_context_agent_models.py
@@ -1570,7 +1570,7 @@ git commit -m "feat(agent-models): parse role headers into LLMContext.agent_mode
 - Modify: `server/routers/learning.py`
 - Extend: `server/tests/test_llm_context_agent_models.py` or `test_learning_graph_router.py` / `test_generation_api.py`
 
-- [ ] **Step 1: Call validation at start of**
+- [x] **Step 1: Call validation at start of**
 
 - `generate_course` (`POST /learning/generate`)
 - `resume_generation` (`POST /learning/sessions/{id}/resume`)
@@ -1587,7 +1587,7 @@ async def generate_course(...):
 
 Do **not** validate on chat endpoint.
 
-- [ ] **Step 2: Add API-level test** (TestClient) that generate without agent headers → 400 with detail listing missing roles. Prefer overriding nothing and sending headers, or unit-test `require_agent_models` already covers logic — add one router integration if easy via existing harness.
+- [x] **Step 2: Add API-level test** (TestClient) that generate without agent headers → 400 with detail listing missing roles. Prefer overriding nothing and sending headers, or unit-test `require_agent_models` already covers logic — add one router integration if easy via existing harness.
 
 If existing tests override `get_llm_context` with bare `LLMContext(api_key=..., model=...)`, update those overrides used for generate/resume/regen to include full `agent_models` dict so tests keep passing:
 
@@ -1612,14 +1612,14 @@ rg "get_llm_context|LLMContext\(" server/tests -n
 
 Update overrides that hit generate/resume/regen paths.
 
-- [ ] **Step 3: Run server tests subset**
+- [x] **Step 3: Run server tests subset**
 
 ```bash
 cd server
 .venv\Scripts\python -m unittest server.tests.test_llm_context_agent_models server.tests.test_generation_api server.tests.test_learning_graph_router server.tests.test_regen_stream
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/routers/learning.py server/tests/
@@ -1637,7 +1637,7 @@ git commit -m "feat(agent-models): require four agent models on generate/resume/
 - Create: `server/tests/test_agent_model_resolution.py`
 - Modify: `server/graph/regen_stream.py`
 
-- [ ] **Step 1: Write resolution tests**
+- [x] **Step 1: Write resolution tests**
 
 ```python
 """
@@ -1753,14 +1753,14 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run — FAIL** until base.py updated
+- [x] **Step 2: Run — FAIL** until base.py updated
 
 ```bash
 cd server
 .venv\Scripts\python -m unittest server.tests.test_agent_model_resolution
 ```
 
-- [ ] **Step 3: Update `BaseAgent.generate`**
+- [x] **Step 3: Update `BaseAgent.generate`**
 
 Replace model/provider/key/reasoning extraction:
 
@@ -1790,7 +1790,7 @@ response = await instructor_client.create_structured(
 
 Remove earlier single-key-only checks that block before resolve; still raise if resolve returns empty key.
 
-- [ ] **Step 4: Update `regen_stream.py`**
+- [x] **Step 4: Update `regen_stream.py`**
 
 Where it currently does:
 
@@ -1812,7 +1812,7 @@ model_slug, provider, api_key, reasoning_params = (
 
 Use `provider` for `_get_provider_config(provider)` and client construction.
 
-- [ ] **Step 5: Verify `depth_router.py` still uses main path**
+- [x] **Step 5: Verify `depth_router.py` still uses main path**
 
 `classify_depth` already passes `role="depth_router"` and `model_override=llm_context.model`. Optionally refactor to `resolve_agent_call("depth_router")` for consistency — recommended:
 
@@ -1831,14 +1831,14 @@ return await instructor_client.create_structured(
 )
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 ```bash
 cd server
 .venv\Scripts\python -m unittest server.tests.test_agent_model_resolution server.tests.test_depth_router server.tests.test_regen_stream server.tests.test_researcher_agent server.tests.test_generator_agent
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add server/agents/base.py server/graph/regen_stream.py \
@@ -1857,7 +1857,7 @@ git commit -m "feat(agent-models): resolve per-role model/provider/thinking at r
 - Any remaining `server/tests/*` that construct bare `LLMContext` for full graph runs
 - Client mocks missing `agentModels`
 
-- [ ] **Step 1: Grep and fix incomplete fixtures**
+- [x] **Step 1: Grep and fix incomplete fixtures**
 
 ```bash
 rg "LLMContext\(" server/tests -n
@@ -1868,7 +1868,7 @@ For server graph/runtime tests that actually invoke agents with real `BaseAgent.
 
 For client tests mocking settings without agent models, either add four roles or mock `areAgentModelsConfigured` if the component under test only checks API key.
 
-- [ ] **Step 2: Run full server unit tests**
+- [x] **Step 2: Run full server unit tests**
 
 ```bash
 cd server
@@ -1877,7 +1877,7 @@ cd server
 
 Expected: all PASS
 
-- [ ] **Step 3: Run full client checks**
+- [x] **Step 3: Run full client checks**
 
 ```bash
 cd client
@@ -1888,7 +1888,7 @@ npm run build
 
 Expected: all PASS
 
-- [ ] **Step 4: Manual smoke checklist** (document in commit message if done)
+- [x] **Step 4: Manual smoke checklist** (document in commit message if done)
 
 1. Settings → set main Default/Depth Router model + four agent models (mix providers if both keys set).
 2. Start course → network tab shows `X-Researcher-Model` … `X-Quizzer-Model`.
@@ -1897,7 +1897,7 @@ Expected: all PASS
 5. Chat still uses `X-Chat-Model` only; no agent headers required.
 6. depth auto mode still works with main model.
 
-- [ ] **Step 5: Final commit**
+- [x] **Step 5: Final commit**
 
 ```bash
 git add -A
