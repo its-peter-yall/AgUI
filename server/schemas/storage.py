@@ -17,7 +17,7 @@ USAGE:
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -67,3 +67,32 @@ class StorageStatusResponse(StorageSchema):
     can_disconnect: bool
     can_migrate: bool
     local_data_present: bool
+
+
+class StorageMigrateRequest(StorageSchema):
+    provider_settings: dict[str, Any]
+    web_search_settings: dict[str, Any]
+
+
+class CollectionMigrationResponse(StorageSchema):
+    rows: int = Field(ge=0)
+    matched: int = Field(ge=0)
+    upserted: int = Field(ge=0)
+    modified: int = Field(ge=0)
+
+
+class StorageMigrateResponse(StorageSchema):
+    collections: dict[str, CollectionMigrationResponse]
+    checkpoints: int = Field(ge=0)
+    checkpoint_writes: int = Field(ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AppSettingsResponse(StorageSchema):
+    provider_settings: Optional[dict[str, Any]] = None
+    web_search_settings: Optional[dict[str, Any]] = None
+
+
+class AppSettingsUpdate(StorageSchema):
+    provider_settings: dict[str, Any]
+    web_search_settings: dict[str, Any]

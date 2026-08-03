@@ -23,7 +23,9 @@ import unittest
 from pydantic import ValidationError
 
 from server.schemas.storage import (
+    AppSettingsResponse,
     StorageConnectRequest,
+    StorageMigrateRequest,
     StorageStatusResponse,
 )
 
@@ -56,6 +58,27 @@ class StorageSchemaTests(unittest.TestCase):
             StorageConnectRequest.model_validate(
                 {"uri": "https://host", "dbName": "a2ui"}
             )
+
+    def test_migrate_request_accepts_browser_snapshots(self) -> None:
+        request = StorageMigrateRequest.model_validate(
+            {
+                "providerSettings": {"activeProvider": "openrouter"},
+                "webSearchSettings": {"masterEnabled": False},
+            }
+        )
+        self.assertEqual(
+            request.provider_settings["activeProvider"],
+            "openrouter",
+        )
+
+    def test_app_settings_response_keeps_camel_case(self) -> None:
+        response = AppSettingsResponse(
+            provider_settings={},
+            web_search_settings={},
+        )
+        payload = response.model_dump(mode="json", by_alias=True)
+        self.assertIn("providerSettings", payload)
+        self.assertIn("webSearchSettings", payload)
 
 
 if __name__ == "__main__":
