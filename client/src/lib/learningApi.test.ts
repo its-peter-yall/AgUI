@@ -129,10 +129,29 @@ vi.mock('./providerSettings', () => ({
         model: 'test/model',
         modelTitle: 'Test',
         thinking: { enabled: false, effort: 'high' },
+        agentModels: {
+          researcher: {
+            modelId: 'r-model',
+            modelProvider: 'openrouter',
+          },
+          planner: {
+            modelId: 'p-model',
+            modelProvider: 'openrouter',
+          },
+          generator: {
+            modelId: 'g-model',
+            modelProvider: 'openrouter',
+          },
+          quizzer: {
+            modelId: 'q-model',
+            modelProvider: 'openrouter',
+          },
+        },
       },
       generalcompute: { apiKey: '', model: '', modelTitle: '' },
     },
   }),
+  areAgentModelsConfigured: () => true,
   getWebSearchSettings: () => ({
     masterEnabled: true,
     providers: {
@@ -190,6 +209,17 @@ describe('learningApi secret scope', () => {
       'X-OpenRouter-Key': 'llm-secret',
       'X-Web-Search': 'true',
       'X-Tavily-Key': 'tvly-secret',
+    });
+  });
+
+  it('generate attaches per-role agent model headers', async () => {
+    await generateCourse({ query: 'Topic' }, { webSearchEnabled: false });
+    const headers = lastRequestConfig()?.headers ?? {};
+    expect(headers).toMatchObject({
+      'X-Researcher-Model': expect.any(String),
+      'X-Planner-Model': expect.any(String),
+      'X-Generator-Model': expect.any(String),
+      'X-Quizzer-Model': expect.any(String),
     });
   });
 });

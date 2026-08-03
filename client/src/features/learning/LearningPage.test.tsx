@@ -51,6 +51,24 @@ vi.mock('@/lib/learningApi', () => ({
 
 vi.mock('@/lib/providerSettings', () => ({
   hasWebSearchCapability: () => api.hasWebSearchCapability(),
+  getProviderSettings: () => ({
+    activeProvider: 'openrouter',
+    providers: {
+      openrouter: {
+        apiKey: 'k',
+        model: 'm',
+        modelTitle: 'M',
+        agentModels: {
+          researcher: { modelId: 'r' },
+          planner: { modelId: 'p' },
+          generator: { modelId: 'g' },
+          quizzer: { modelId: 'q' },
+        },
+      },
+      generalcompute: { apiKey: '', model: '', modelTitle: '' },
+    },
+  }),
+  areAgentModelsConfigured: () => true,
 }));
 
 vi.mock('react-router-dom', async () => {

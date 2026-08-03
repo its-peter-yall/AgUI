@@ -28,7 +28,7 @@
 
 import axios from 'axios';
 import { getProviderSettings, getWebSearchSettings } from './providerSettings';
-import { buildProviderHeaders } from './providerApi';
+import { buildAgentModelHeaders } from './agentModelHeaders';
 import { buildWebSearchHeaders } from './webSearchHeaders';
 import type {
   ConceptNode,
@@ -85,13 +85,7 @@ function buildLlmHeaders(): Record<string, string> {
   if (!activeConfig.apiKey) {
     return { 'Content-Type': 'application/json' };
   }
-  return buildProviderHeaders(
-    settings.activeProvider,
-    activeConfig.apiKey,
-    activeConfig.model || undefined,
-    activeConfig.thinking,
-    activeConfig.maxCompletionTokens,
-  );
+  return buildAgentModelHeaders(settings);
 }
 
 // --- Learning Session ---

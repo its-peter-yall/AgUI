@@ -48,7 +48,11 @@ import {
 	getLearningSession,
 	resumeGeneration,
 } from "@/lib/learningApi";
-import { hasWebSearchCapability } from "@/lib/providerSettings";
+import {
+	areAgentModelsConfigured,
+	getProviderSettings,
+	hasWebSearchCapability,
+} from "@/lib/providerSettings";
 import { cn } from "@/lib/utils";
 import type { LearningSessionWithNodes } from "@/types/learning";
 import type { ResearchReport } from "@/types/generation";
@@ -154,6 +158,14 @@ export function LearningPage() {
 
 	const resumeMutation = useMutation({
 		mutationFn: async () => {
+			const providerSettings = getProviderSettings();
+			const activeCfg =
+				providerSettings.providers[providerSettings.activeProvider];
+			if (!areAgentModelsConfigured(activeCfg)) {
+				throw new Error(
+					"Set Researcher, Planner, Generator, and Quizzer models in Settings before resuming.",
+				);
+			}
 			const needsSearch =
 				!!session?.generation?.web_search_requested &&
 				session.generation.grounding_status !== "GROUNDED" &&
@@ -175,7 +187,11 @@ export function LearningPage() {
 			});
 		},
 		onError: (err) => {
-			if (err instanceof Error && err.message.includes("Web search")) {
+			if (
+				err instanceof Error &&
+				(err.message.includes("Web search") ||
+					err.message.includes("Quizzer models"))
+			) {
 				setControlError(err.message);
 				return;
 			}
@@ -454,6 +470,12 @@ export function LearningPage() {
 								isCancelling={cancelMutation.isPending}
 								isResuming={resumeMutation.isPending}
 								isDeleting={deleteMutation.isPending}
+								canResumeAgents={(() => {
+									const s = getProviderSettings();
+									return areAgentModelsConfigured(
+										s.providers[s.activeProvider],
+									);
+								})()}
 							/>
 							{controlError && (
 								<p className="mt-2 text-xs text-destructive" role="alert">

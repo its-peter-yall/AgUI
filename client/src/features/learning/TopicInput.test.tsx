@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   generateCourse: vi.fn(),
   navigate: vi.fn(),
   capability: true,
+  agentsReady: true,
 }));
 
 vi.mock('@/lib/learningApi', () => ({
@@ -42,10 +43,23 @@ vi.mock('@/lib/providerSettings', () => ({
   getProviderSettings: () => ({
     activeProvider: 'openrouter',
     providers: {
-      openrouter: { apiKey: 'llm-key', model: 'test/model', modelTitle: 'Test' },
+      openrouter: {
+        apiKey: 'llm-key',
+        model: 'test/model',
+        modelTitle: 'Test',
+        agentModels: mocks.agentsReady
+          ? {
+              researcher: { modelId: 'r' },
+              planner: { modelId: 'p' },
+              generator: { modelId: 'g' },
+              quizzer: { modelId: 'q' },
+            }
+          : undefined,
+      },
       generalcompute: { apiKey: '', model: '', modelTitle: '' },
     },
   }),
+  areAgentModelsConfigured: () => mocks.agentsReady,
   hasWebSearchCapability: () => mocks.capability,
 }));
 
@@ -73,6 +87,31 @@ describe('TopicInput web search', () => {
     mocks.generateCourse.mockReset();
     mocks.navigate.mockReset();
     mocks.capability = true;
+    mocks.agentsReady = true;
+  });
+
+  it('disables Learn when agent models incomplete', () => {
+    mocks.agentsReady = false;
+    renderInput();
+    fireEvent.change(screen.getByRole('searchbox'), {
+      target: { value: 'Modern CSS' },
+    });
+    expect(
+      screen.getByRole('button', { name: /start learning/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('alert'),
+    ).toHaveTextContent(/Researcher, Planner, Generator, and Quizzer/i);
+  });
+
+  it('enables Learn when key and all four agent models set', () => {
+    renderInput();
+    fireEvent.change(screen.getByRole('searchbox'), {
+      target: { value: 'Modern CSS' },
+    });
+    expect(
+      screen.getByRole('button', { name: /start learning/i }),
+    ).not.toBeDisabled();
   });
 
   it('hides search icon when capability is unavailable', () => {

@@ -53,6 +53,8 @@ export interface GenerationStatusPanelProps {
   isCancelling?: boolean;
   isResuming?: boolean;
   isDeleting?: boolean;
+  /** When false, Resume is disabled (agent models incomplete). Default true. */
+  canResumeAgents?: boolean;
   className?: string;
 }
 
@@ -64,6 +66,7 @@ export function GenerationStatusPanel({
   isCancelling = false,
   isResuming = false,
   isDeleting = false,
+  canResumeAgents = true,
   className,
 }: GenerationStatusPanelProps) {
   const stage = generation.stage;
@@ -177,7 +180,7 @@ export function GenerationStatusPanel({
             <button
               type="button"
               onClick={onResume}
-              disabled={pending}
+              disabled={pending || canResumeAgents === false}
               aria-label="Resume generation"
               className={cn(
                 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
@@ -189,6 +192,15 @@ export function GenerationStatusPanel({
               <Play className="h-3.5 w-3.5" aria-hidden="true" />
               {isResuming ? 'Resuming...' : 'Resume'}
             </button>
+          )}
+          {generation.can_resume && canResumeAgents === false && (
+            <p
+              className="w-full text-xs text-amber-600 dark:text-amber-400"
+              role="alert"
+            >
+              Set Researcher, Planner, Generator, and Quizzer models in Settings
+              before resuming.
+            </p>
           )}
           <button
             type="button"

@@ -32,7 +32,7 @@
  */
 
 import { getProviderSettings } from "./providerSettings";
-import { buildProviderHeaders } from "./providerApi";
+import { buildAgentModelHeaders } from "./agentModelHeaders";
 import type { ConceptNode } from "@/types/learning";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -63,15 +63,7 @@ export async function streamRegenerateNode({
 }: StreamRegenerateParams): Promise<void> {
 	try {
 		const settings = getProviderSettings();
-		const activeConfig = settings.providers[settings.activeProvider];
-
-		const providerHeaders = buildProviderHeaders(
-			settings.activeProvider,
-			activeConfig.apiKey,
-			activeConfig.model || undefined,
-			activeConfig.thinking,
-			activeConfig.maxCompletionTokens,
-		);
+		const providerHeaders = buildAgentModelHeaders(settings);
 
 		const url = `${BASE_URL}/learning/nodes/${nodeId}/regenerate/stream`;
 

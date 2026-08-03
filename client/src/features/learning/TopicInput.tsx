@@ -31,6 +31,7 @@ import { ChevronDown, Globe2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { generateCourse } from '@/lib/learningApi';
 import {
+  areAgentModelsConfigured,
   getProviderSettings,
   hasWebSearchCapability,
 } from '@/lib/providerSettings';
@@ -140,11 +141,14 @@ export function TopicInput({
   });
 
   const settings = getProviderSettings();
-  const hasApiKey = Boolean(settings.providers[settings.activeProvider].apiKey);
+  const activeConfig = settings.providers[settings.activeProvider];
+  const hasApiKey = Boolean(activeConfig.apiKey);
+  const agentsReady = areAgentModelsConfigured(activeConfig);
+  const canStart = hasApiKey && agentsReady;
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (query.trim() && !generateMutation.isPending && hasApiKey) {
+    if (query.trim() && !generateMutation.isPending && canStart) {
       generateMutation.mutate({
         query: query.trim(),
         user_id: userId,
@@ -176,7 +180,7 @@ export function TopicInput({
           onChange={(e) => setQuery(e.target.value)}
           autoFocus={autoFocus}
           placeholder={placeholder}
-          disabled={isLoading || !hasApiKey}
+          disabled={isLoading || !canStart}
           aria-describedby={error ? `${inputId}-error` : undefined}
           aria-invalid={error ? 'true' : undefined}
           className={cn(
@@ -201,7 +205,7 @@ export function TopicInput({
                   : 'Web search off for this course'
               }
               onClick={() => setWebSearchEnabled((v) => !v)}
-              disabled={isLoading || !hasApiKey}
+              disabled={isLoading || !canStart}
               className={cn(
                 'inline-flex items-center justify-center h-8 w-8 rounded-md shrink-0',
                 'border transition-colors duration-200',
@@ -219,11 +223,11 @@ export function TopicInput({
             <button
               type="button"
               onClick={() => {
-                if (!isLoading && hasApiKey) {
+                if (!isLoading && canStart) {
                   setModeOpen((open) => !open);
                 }
               }}
-              disabled={isLoading || !hasApiKey}
+              disabled={isLoading || !canStart}
               aria-label="Learning depth mode"
               aria-haspopup="listbox"
               aria-expanded={modeOpen}
@@ -287,7 +291,7 @@ export function TopicInput({
           </div>
           <button
             type="submit"
-            disabled={!query.trim() || isLoading || !hasApiKey}
+            disabled={!query.trim() || isLoading || !canStart}
             aria-label={isLoading ? 'Starting...' : 'Start learning'}
             className={cn(
               'px-4 py-1.5 rounded-md text-sm font-medium',
@@ -329,6 +333,16 @@ export function TopicInput({
         </p>
       )}
 
+      {hasApiKey && !agentsReady && (
+        <p
+          className="mt-3 text-sm text-amber-600 dark:text-amber-400 text-center"
+          role="alert"
+        >
+          Set Researcher, Planner, Generator, and Quizzer models in Settings
+          before starting a course.
+        </p>
+      )}
+
       <div className="mt-4 flex flex-wrap gap-2 justify-center">
         <span className="text-sm text-muted-foreground">Try:</span>
         {TOPIC_SUGGESTIONS.map((suggestion) => (
@@ -336,7 +350,7 @@ export function TopicInput({
             key={suggestion}
             type="button"
             onClick={() => handleSuggestionClick(suggestion)}
-            disabled={isLoading || !hasApiKey}
+            disabled={isLoading || !canStart}
             className={cn(
               'px-3 py-1 text-sm rounded-full',
               'bg-muted hover:bg-muted/80 text-muted-foreground',

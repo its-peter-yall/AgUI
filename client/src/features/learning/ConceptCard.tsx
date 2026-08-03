@@ -61,6 +61,10 @@ import type {
 import { getVisibleQuiz } from "@/types/learning";
 import { useQueryClient } from "@tanstack/react-query";
 import { streamRegenerateNode } from "@/lib/regenApi";
+import {
+	areAgentModelsConfigured,
+	getProviderSettings,
+} from "@/lib/providerSettings";
 import { MarkdownRenderer, InlineMarkdown } from "./MarkdownRenderer";
 import { QuizFeedback } from "./QuizFeedback";
 import { useQuizFeedback } from "./useQuizFeedback";
@@ -158,7 +162,21 @@ export function ConceptCard({
 	const [localError, setLocalError] = useState<string | null>(null);
 	const queryClient = useQueryClient();
 
+	const agentSettings = getProviderSettings();
+	const agentsReady = areAgentModelsConfigured(
+		agentSettings.providers[agentSettings.activeProvider],
+	);
+
 	const startStreamingRegen = async () => {
+		const settings = getProviderSettings();
+		const cfg = settings.providers[settings.activeProvider];
+		if (!areAgentModelsConfigured(cfg)) {
+			setLocalError(
+				"Set Researcher, Planner, Generator, and Quizzer models in Settings before regenerating.",
+			);
+			return;
+		}
+
 		setIsRegeneratingLocal(true);
 		setStreamingMarkdown("");
 		setLocalError(null);
@@ -377,7 +395,9 @@ export function ConceptCard({
 								<button
 									type="button"
 									onClick={() => setShowRegenConfirm(true)}
-									disabled={isRegenerating || isRegeneratingLocal}
+									disabled={
+										isRegenerating || isRegeneratingLocal || !agentsReady
+									}
 									title="Regenerate the content"
 									aria-label="Regenerate the content"
 									className={cn(
@@ -822,13 +842,15 @@ export function ConceptCard({
 										</button>
 									)}
 									<div className="flex gap-3">
-										<button
-											onClick={() => setShowRegenConfirm(true)}
-											disabled={isRegenerating || isRegeneratingLocal}
-											className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-										>
-											{isRegenerating || isRegeneratingLocal ? "Regenerating..." : "Retry Generation"}
-										</button>
+									<button
+										onClick={() => setShowRegenConfirm(true)}
+										disabled={
+											isRegenerating || isRegeneratingLocal || !agentsReady
+										}
+										className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+									>
+										{isRegenerating || isRegeneratingLocal ? "Regenerating..." : "Retry Generation"}
+									</button>
 										{canSkip && (
 											<button
 												onClick={() => onSkipNode?.(node.id)}
