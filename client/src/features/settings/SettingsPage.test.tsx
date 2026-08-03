@@ -50,6 +50,12 @@ vi.mock('./ThinkingModeToggle', () => ({
   ThinkingModeToggle: () => <div>chat-thinking-toggle</div>,
 }));
 
+vi.mock('./StorageSettingsPanel', () => ({
+  StorageSettingsPanel: () => (
+    <div data-testid="storage-settings-panel">Storage panel content</div>
+  ),
+}));
+
 function renderSettingsPage() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -69,6 +75,7 @@ describe('SettingsPage', () => {
 
     for (const name of [
       'Appearance',
+      /Data Storage/,
       'AI Provider Credentials',
       'Web Search',
       'Agent Models',
@@ -83,6 +90,24 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('OpenRouter panel content')).not.toBeInTheDocument();
     expect(screen.queryByText('Web search panel content')).not.toBeInTheDocument();
     expect(screen.queryByText('Model picker content')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('storage-settings-panel'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('expands Data Storage section and renders panel', async () => {
+    renderSettingsPage();
+
+    expect(screen.getByRole('button', { name: /Data Storage/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Data Storage/ }));
+    expect(screen.getByRole('button', { name: /Data Storage/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByTestId('storage-settings-panel')).toBeInTheDocument();
   });
 
   it('expands and collapses only the section that was selected', () => {

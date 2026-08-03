@@ -28,7 +28,7 @@
  * ============================================================================
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -42,6 +42,7 @@ import {
 	ArrowLeft,
 	MessageCircle,
 	Bot,
+	Database,
 } from "lucide-react";
 
 import { useTheme } from "@/hooks/useTheme";
@@ -50,7 +51,12 @@ import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel";
 import { AgentModelsPanel } from "./AgentModelsPanel";
 import { ModelPicker } from "./ModelPicker";
 import { ThinkingModeToggle } from "./ThinkingModeToggle";
-import { getProviderSettings, setProviderConfig } from "@/lib/providerSettings";
+import { StorageSettingsPanel } from "./StorageSettingsPanel";
+import {
+	APP_SETTINGS_HYDRATED_EVENT,
+	getProviderSettings,
+	setProviderConfig,
+} from "@/lib/providerSettings";
 import { getProviderModels, ProviderApiError } from "@/lib/providerApi";
 import type {
 	AIProvider,
@@ -61,6 +67,7 @@ import { cn } from "@/lib/utils";
 
 type SettingsSectionKey =
 	| "appearance"
+	| "data-storage"
 	| "ai-provider"
 	| "agent-models"
 	| "web-search"
@@ -123,6 +130,7 @@ export function SettingsPage() {
 		Record<SettingsSectionKey, boolean>
 	>({
 		appearance: false,
+		"data-storage": false,
 		"ai-provider": false,
 		"agent-models": false,
 		"web-search": false,
@@ -131,6 +139,14 @@ export function SettingsPage() {
 	const location = useLocation();
 
 	const fromPath = (location.state as { from?: string })?.from || "/learn";
+
+	useEffect(() => {
+		const refresh = () => setSettings(getProviderSettings());
+		window.addEventListener(APP_SETTINGS_HYDRATED_EVENT, refresh);
+		return () => {
+			window.removeEventListener(APP_SETTINGS_HYDRATED_EVENT, refresh);
+		};
+	}, []);
 
 	const handleChatModelSelect = useCallback(
 		(provider: AIProvider, modelId: string, modelTitle: string) => {
@@ -326,7 +342,28 @@ export function SettingsPage() {
 					</div>
 				</SettingsSection>
 
-				{/* Section 2: AI Provider configurations */}
+				{/* Section 2: Data Storage */}
+				<SettingsSection
+					headingId="data-storage-heading"
+					contentId="data-storage-content"
+					title={
+						<span className="flex items-center gap-2">
+							<Database
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
+							Data Storage
+						</span>
+					}
+					isExpanded={expandedSections["data-storage"]}
+					onToggle={() => toggleSection("data-storage")}
+				>
+					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
+						<StorageSettingsPanel />
+					</div>
+				</SettingsSection>
+
+				{/* Section 3: AI Provider configurations */}
 				<SettingsSection
 					headingId="ai-provider-heading"
 					contentId="ai-provider-content"
