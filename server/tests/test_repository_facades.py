@@ -21,6 +21,7 @@ USAGE:
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -48,6 +49,25 @@ class RepositoryFacadeTests(unittest.TestCase):
         facade.read = MagicMock(return_value="patched")
 
         self.assertEqual(facade.read(), "patched")
+
+    def test_registry_facades_point_at_context_bundle(self) -> None:
+        from server.database.storage_registry import (
+            learning_repository,
+            storage_context,
+        )
+
+        expected = MagicMock(return_value={"id": "s1"})
+        original = storage_context._repositories
+        fake = replace(original, learning=MagicMock())
+        fake.learning.get_learning_session = expected
+        try:
+            storage_context._repositories = fake
+            result = learning_repository.get_learning_session("s1")
+        finally:
+            storage_context._repositories = original
+
+        self.assertEqual(result, {"id": "s1"})
+        expected.assert_called_once_with("s1")
 
 
 if __name__ == "__main__":
