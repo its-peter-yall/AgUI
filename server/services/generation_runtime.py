@@ -72,6 +72,16 @@ class GenerationRuntime:
         self.active_tasks: Set[asyncio.Task[None]] = set()
         self._session_tasks: dict[str, asyncio.Task[None]] = {}
 
+    @property
+    def active_session_ids(self) -> list[str]:
+        """Return sorted sessions with unfinished local tasks."""
+
+        return sorted(
+            session_id
+            for session_id, task in self._session_tasks.items()
+            if not task.done()
+        )
+
     def _track_task(self, session_id: str, task: asyncio.Task[None]) -> None:
         self.active_tasks.add(task)
         self._session_tasks[session_id] = task

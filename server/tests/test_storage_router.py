@@ -46,9 +46,16 @@ def make_storage(mode: DeploymentMode) -> SimpleNamespace:
     )
 
 
-def make_client(storage: SimpleNamespace) -> TestClient:
+def make_client(
+    storage: SimpleNamespace,
+    *,
+    active_session_ids: list[str] | None = None,
+) -> TestClient:
     app = FastAPI()
     app.state.storage = storage
+    app.state.generation_runtime = SimpleNamespace(
+        active_session_ids=list(active_session_ids or []),
+    )
     app.include_router(router)
     return TestClient(app)
 
@@ -106,6 +113,17 @@ class StorageRouterTests(unittest.TestCase):
             json={"uri": "mongodb://host", "dbName": "a2ui"},
         )
         self.assertEqual(down.status_code, 503)
+
+    def test_connect_returns_409_while_generation_is_active(self) -> None:
+        storage = make_storage(DeploymentMode.LOCAL)
+        client = make_client(storage, active_session_ids=["s1"])
+        response = client.post(
+            "/settings/storage/connect",
+            json={"uri": "mongodb://host", "dbName": "a2ui"},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["sessionIds"], ["s1"])
+        storage.connect.assert_not_called()
 
 
 if __name__ == "__main__":

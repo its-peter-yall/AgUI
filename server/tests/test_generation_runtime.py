@@ -76,6 +76,19 @@ class GenerationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("llm_context", runtime.__dict__)
         self.assertNotIn("search_context", runtime.__dict__)
 
+    def test_active_session_ids_excludes_finished_tasks(self) -> None:
+        runtime = GenerationRuntime(
+            app_state=SimpleNamespace(),
+            job_store=MagicMock(),
+            runner=AsyncMock(),
+        )
+        active = MagicMock()
+        active.done.return_value = False
+        finished = MagicMock()
+        finished.done.return_value = True
+        runtime._session_tasks = {"s1": active, "s2": finished}
+        self.assertEqual(runtime.active_session_ids, ["s1"])
+
 
 if __name__ == "__main__":
     unittest.main()

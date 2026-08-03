@@ -69,6 +69,23 @@ def _require_local(context: StorageContext) -> None:
         )
 
 
+def _require_idle(request: Request) -> None:
+    runtime = getattr(request.app.state, "generation_runtime", None)
+    session_ids = runtime.active_session_ids if runtime is not None else []
+    if session_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "storage_switch_requires_idle_jobs",
+                "message": (
+                    "Cancel or wait for active generation before "
+                    "switching storage"
+                ),
+                "sessionIds": session_ids,
+            },
+        )
+
+
 @router.get(
     "/status",
     response_model=StorageStatusResponse,
@@ -89,6 +106,7 @@ async def connect_storage(
 ) -> StorageStatusResponse:
     context = _storage(request)
     _require_local(context)
+    _require_idle(request)
     try:
         await run_in_threadpool(
             context.connect,
@@ -116,5 +134,6 @@ async def connect_storage(
 async def disconnect_storage(request: Request) -> StorageStatusResponse:
     context = _storage(request)
     _require_local(context)
+    _require_idle(request)
     await run_in_threadpool(context.disconnect)
     return _status(context)
