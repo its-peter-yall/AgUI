@@ -33,7 +33,14 @@
  * ============================================================================
  */
 
-import type { AIProvider, ThinkingConfig } from "@/types/provider";
+import type {
+	AIProvider,
+	AgentModelSelection,
+	AgentRole,
+	ThinkingConfig,
+	ThinkingEffort,
+} from "@/types/provider";
+import { AGENT_ROLES } from "@/types/provider";
 import type {
 	WebSearchProviderConfig,
 	WebSearchProviderId,
@@ -53,6 +60,7 @@ export interface ProviderConfig {
 	chatModelProvider?: AIProvider;
 	maxCompletionTokens?: number;
 	thinking?: ThinkingConfig;
+	agentModels?: Partial<Record<AgentRole, AgentModelSelection>>;
 }
 
 export interface AIProviderSettings {

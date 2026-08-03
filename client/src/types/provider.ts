@@ -48,6 +48,24 @@ export interface ThinkingConfig {
   effort: ThinkingEffort;
 }
 
+/** Learning pipeline agent roles with selectable models */
+export type AgentRole = 'researcher' | 'planner' | 'generator' | 'quizzer';
+
+export const AGENT_ROLES: readonly AgentRole[] = [
+  'researcher',
+  'planner',
+  'generator',
+  'quizzer',
+] as const;
+
+/** Per-role model pick stored under ProviderConfig.agentModels */
+export interface AgentModelSelection {
+  modelId: string;
+  modelTitle?: string;
+  modelProvider?: AIProvider;
+  thinking?: ThinkingConfig;
+}
+
 /** Response shape from GET /llm/models */
 export type ProviderModelList = ProviderModel[];
 
