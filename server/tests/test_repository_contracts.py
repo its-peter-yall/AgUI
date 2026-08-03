@@ -21,6 +21,8 @@ USAGE:
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
 
 from server.database.repositories.protocols import (
     AppSettingsRepository,
@@ -30,6 +32,8 @@ from server.database.repositories.protocols import (
     ProgressEventRepository,
     ResearchRepository,
 )
+from server.database.repositories.sqlite import build_sqlite_bundle
+from server.database.storage_mode import DeploymentMode, StorageContext
 
 
 class RepositoryContractTests(unittest.TestCase):
@@ -70,6 +74,27 @@ class RepositoryContractTests(unittest.TestCase):
         for contract, methods in required.items():
             with self.subTest(contract=contract.__name__):
                 self.assertTrue(methods.issubset(vars(contract)))
+
+    def test_context_exposes_sqlite_bundle_by_default(self) -> None:
+        stores = {
+            "learning": MagicMock(),
+            "jobs": MagicMock(),
+            "artifacts": MagicMock(),
+            "research": MagicMock(),
+            "progress": MagicMock(),
+        }
+        bundle = build_sqlite_bundle(**stores)
+        context = StorageContext(
+            deployment_mode=DeploymentMode.LOCAL,
+            sqlite_path=Path("unused.db"),
+            sqlite_repositories=bundle,
+        )
+
+        self.assertIs(context.learning, bundle.learning)
+        self.assertIs(context.jobs, bundle.jobs)
+        self.assertIs(context.artifacts, bundle.artifacts)
+        self.assertIs(context.research, bundle.research)
+        self.assertIs(context.progress, bundle.progress)
 
 
 if __name__ == "__main__":
