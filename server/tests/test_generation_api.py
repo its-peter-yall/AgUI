@@ -123,6 +123,28 @@ class GenerationApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         runtime.start.assert_not_awaited()
 
+    def test_delete_calls_mongo_style_adelete_thread(self) -> None:
+        checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
+        runtime = SimpleNamespace(stop_for_delete=AsyncMock())
+        app = FastAPI()
+        app.state.generation_runtime = runtime
+        app.state.checkpointer = checkpointer
+        app.include_router(router)
+        with (
+            patch(
+                "server.routers.learning.learning_manager.get_learning_session",
+                return_value={"id": "s1"},
+            ),
+            patch(
+                "server.routers.learning.learning_manager.delete_learning_session",
+                return_value=True,
+            ),
+        ):
+            with TestClient(app) as client:
+                response = client.delete("/learning/sessions/s1")
+        self.assertEqual(response.status_code, 200)
+        checkpointer.adelete_thread.assert_awaited_once_with("gen-s1")
+
 
 class ResearchApiTests(unittest.TestCase):
     """Tests public research report projection."""

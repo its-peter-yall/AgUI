@@ -20,9 +20,35 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from server.database.checkpointer import CheckpointerController
+
+
+class FakeMongoSaver:
+    """Minimal Mongo-style saver surface used by delete/resume paths."""
+
+    def __init__(self) -> None:
+        self.adelete_thread = AsyncMock()
+        self.aput = AsyncMock()
+        self.aput_writes = AsyncMock()
+        self.aget_tuple = AsyncMock(return_value=None)
+        self._latest: dict[str, object] = {}
+
+    async def store_tuple(self, thread_id: str, checkpoint_id: str) -> None:
+        self._latest[thread_id] = SimpleNamespace(
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": "",
+                    "checkpoint_id": checkpoint_id,
+                }
+            },
+            checkpoint={"id": checkpoint_id, "v": 1},
+        )
+        self.aget_tuple = AsyncMock(
+            return_value=self._latest[thread_id],
+        )
 
 
 class CheckpointerControllerTests(unittest.TestCase):
@@ -67,6 +93,26 @@ class CheckpointerControllerTests(unittest.TestCase):
         self.controller.activate(MagicMock())
         self.controller.activate_sqlite()
         self.assertIs(self.app_state.checkpointer, self.sqlite_saver)
+
+
+class MongoSaverContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_adelete_thread_uses_generation_thread_id(self) -> None:
+        checkpointer = FakeMongoSaver()
+        await checkpointer.adelete_thread("gen-s1")
+        checkpointer.adelete_thread.assert_awaited_once_with("gen-s1")
+
+    async def test_activate_mongo_exposes_adelete_on_app_state(self) -> None:
+        app_state = SimpleNamespace()
+        mongo_saver = FakeMongoSaver()
+        controller = CheckpointerController(
+            app_state=app_state,
+            sqlite_saver=MagicMock(),
+            graph_builder=lambda saver: ("graph", saver),
+        )
+        controller.activate(mongo_saver)
+        self.assertTrue(hasattr(app_state.checkpointer, "adelete_thread"))
+        await app_state.checkpointer.adelete_thread("gen-s1")
+        mongo_saver.adelete_thread.assert_awaited_once_with("gen-s1")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from server.database.checkpoint_migration import copy_checkpoints
 from server.graph.runner import (
     GenerationAlreadyRunning,
     GenerationCancelled,
@@ -175,6 +176,96 @@ class GenerationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         jobs.mark_paused.assert_called_once()
         jobs.mark_failed.assert_not_called()
+
+    async def test_resume_after_checkpoint_copy_uses_same_thread(self) -> None:
+        item = SimpleNamespace(
+            config={
+                "configurable": {
+                    "thread_id": "gen-session-1",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": "cp2",
+                }
+            },
+            checkpoint={"id": "cp2", "v": 1},
+            metadata={"step": 2},
+            parent_config={
+                "configurable": {
+                    "thread_id": "gen-session-1",
+                    "checkpoint_ns": "",
+                    "checkpoint_id": "cp1",
+                }
+            },
+            pending_writes=[],
+        )
+
+        class Source:
+            async def alist(self, config):
+                yield item
+
+        target = SimpleNamespace(
+            aput=AsyncMock(),
+            aput_writes=AsyncMock(),
+            latest=None,
+        )
+
+        async def aput(config, checkpoint, metadata, new_versions):
+            target.latest = SimpleNamespace(
+                config={
+                    "configurable": {
+                        "thread_id": config["configurable"]["thread_id"],
+                        "checkpoint_ns": config["configurable"].get(
+                            "checkpoint_ns",
+                            "",
+                        ),
+                        "checkpoint_id": checkpoint["id"],
+                    }
+                },
+                checkpoint=checkpoint,
+            )
+
+        target.aput = AsyncMock(side_effect=aput)
+        await copy_checkpoints(Source(), target)
+        self.assertIsNotNone(target.latest)
+        self.assertEqual(
+            target.latest.config["configurable"]["thread_id"],
+            "gen-session-1",
+        )
+
+        graph = AsyncMock()
+        graph.ainvoke.return_value = {"session_id": "session-1"}
+        jobs = MagicMock()
+        jobs.get_by_session.return_value = SimpleNamespace(
+            id="job-1",
+            session_id="session-1",
+            thread_id="gen-session-1",
+            stage=GenerationStage.PAUSED,
+            query="test query",
+            user_id=None,
+            mode="full",
+            resolved_mode="full",
+            research_report_id=None,
+        )
+        jobs.try_acquire_lock.return_value = SimpleNamespace(
+            owner="worker-1",
+            version=2,
+        )
+        jobs.renew_lock.return_value = jobs.try_acquire_lock.return_value
+        await run_generation_job(
+            app_state=SimpleNamespace(course_graph=graph),
+            session_id="session-1",
+            llm_context=LLMContext(api_key="llm-key", model="test/model"),
+            search_context=SearchContext(),
+            resume=True,
+            worker_id="worker-1",
+            job_store=jobs,
+            event_store=MagicMock(),
+        )
+        call = graph.ainvoke.await_args
+        self.assertIsNone(call.args[0])
+        self.assertEqual(
+            call.kwargs["config"]["configurable"]["thread_id"],
+            "gen-session-1",
+        )
 
 
 if __name__ == "__main__":
