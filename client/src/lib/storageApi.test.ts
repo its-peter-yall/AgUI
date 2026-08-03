@@ -130,6 +130,7 @@ describe('storageApi', () => {
     expect(mocks.instance.post).toHaveBeenCalledWith(
       '/settings/storage/connect',
       { uri: 'mongodb://host', dbName: 'a2ui' },
+      { timeout: 15_000 },
     );
   });
 
@@ -147,10 +148,21 @@ describe('storageApi', () => {
     expect(mocks.instance.post).toHaveBeenCalledWith(
       '/settings/storage/migrate',
       { providerSettings, webSearchSettings },
+      { timeout: 300_000 },
     );
   });
 
-  it('gets app settings snapshot', async () => {
+  it('uses extended timeout for migrate requests', async () => {
+    mocks.instance.post.mockResolvedValue({ data: migrationResult });
+    await migrateStorage(providerSettings, webSearchSettings);
+    const config = mocks.instance.post.mock.calls[0]?.[2] as {
+      timeout?: number;
+    };
+    expect(config.timeout).toBeGreaterThanOrEqual(120_000);
+    expect(config.timeout).toBeLessThanOrEqual(300_000);
+  });
+
+  it('gets app settings snapshot with default timeout', async () => {
     const snapshot: AppSettingsSnapshot = {
       providerSettings,
       webSearchSettings,

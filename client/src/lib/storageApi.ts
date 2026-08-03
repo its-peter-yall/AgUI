@@ -14,6 +14,7 @@
  * KEY COMPONENTS:
  *    - getStorageStatus / connectStorage / disconnectStorage
  *    - migrateStorage / getAppSettings / putAppSettings
+ *    - Per-call timeouts (migrate/connect heavier than status)
  *
  * DEPENDENCIES:
  *    - External: axios
@@ -35,9 +36,16 @@ import type {
 } from '@/types/storage';
 import type { WebSearchSettings } from '@/types/webSearch';
 
+/** Default for status / app-settings / disconnect. */
+export const STORAGE_DEFAULT_TIMEOUT_MS = 10_000;
+/** Connect needs headroom for Atlas server selection. */
+export const STORAGE_CONNECT_TIMEOUT_MS = 15_000;
+/** Migrate copies tables + checkpoints; real DBs exceed 10s. */
+export const STORAGE_MIGRATE_TIMEOUT_MS = 300_000;
+
 const storageApi = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-  timeout: 10_000,
+  timeout: STORAGE_DEFAULT_TIMEOUT_MS,
 });
 
 export async function getStorageStatus(): Promise<StorageStatus> {
@@ -53,6 +61,7 @@ export async function connectStorage(
   const response = await storageApi.post<StorageStatus>(
     '/settings/storage/connect',
     settings,
+    { timeout: STORAGE_CONNECT_TIMEOUT_MS },
   );
   return response.data;
 }
@@ -71,6 +80,7 @@ export async function migrateStorage(
   const response = await storageApi.post<StorageMigrationResult>(
     '/settings/storage/migrate',
     { providerSettings, webSearchSettings },
+    { timeout: STORAGE_MIGRATE_TIMEOUT_MS },
   );
   return response.data;
 }

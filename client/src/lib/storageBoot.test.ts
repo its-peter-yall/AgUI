@@ -59,6 +59,7 @@ vi.mock('@/lib/providerSettings', () => ({
 
 import {
   bootstrapStorage,
+  hydrateAndEnableCloudSettings,
   resetStorageBootForTests,
 } from '@/lib/storageBoot';
 import type { StorageStatus } from '@/types/storage';
@@ -175,9 +176,184 @@ describe('bootstrapStorage', () => {
   });
 
   it('continues boot when status request fails', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
     getStorageStatusMock.mockRejectedValue(new Error('offline'));
     await expect(bootstrapStorage()).resolves.toEqual(
       expect.objectContaining({ error: expect.any(String) }),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('logs boot failure once when status request fails', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    getStorageStatusMock.mockRejectedValue(new Error('offline'));
+    await bootstrapStorage();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('Storage boot failed'),
+      expect.anything(),
+    );
+    consoleError.mockRestore();
+  });
+});
+
+describe('hydrateAndEnableCloudSettings secret safety', () => {
+  const localProvider = {
+    activeProvider: 'openrouter' as const,
+    providers: {
+      openrouter: {
+        apiKey: 'local-or-key',
+        model: 'local-model',
+        modelTitle: 'Local',
+      },
+      generalcompute: {
+        apiKey: 'local-gc-key',
+        model: '',
+        modelTitle: '',
+      },
+    },
+  };
+
+  const localWebSearch = {
+    masterEnabled: true,
+    providers: {
+      tavily: { apiKey: 'local-tavily', enabled: true },
+      exa: { apiKey: 'local-exa', enabled: false },
+      brave: { apiKey: '', enabled: false },
+      serpapi: { apiKey: '', enabled: false },
+    },
+  };
+
+  beforeEach(() => {
+    resetStorageBootForTests();
+    getAppSettingsMock.mockReset();
+    putAppSettingsMock.mockReset();
+    setProviderSettingsMock.mockReset();
+    setWebSearchSettingsMock.mockReset();
+    getProviderSettingsMock.mockReset();
+    getWebSearchSettingsMock.mockReset();
+    getProviderSettingsMock.mockReturnValue(localProvider);
+    getWebSearchSettingsMock.mockReturnValue(localWebSearch);
+    putAppSettingsMock.mockResolvedValue({
+      providerSettings: localProvider,
+      webSearchSettings: localWebSearch,
+    });
+  });
+
+  it('pushes local snapshot when cloud settings are null', async () => {
+    getAppSettingsMock.mockResolvedValue({
+      providerSettings: null,
+      webSearchSettings: null,
+    });
+
+    await hydrateAndEnableCloudSettings();
+
+    expect(setProviderSettingsMock).not.toHaveBeenCalled();
+    expect(setWebSearchSettingsMock).not.toHaveBeenCalled();
+    expect(putAppSettingsMock).toHaveBeenCalledWith({
+      providerSettings: localProvider,
+      webSearchSettings: localWebSearch,
+    });
+  });
+
+  it('does not wipe local secrets when cloud secrets are empty strings', async () => {
+    getAppSettingsMock.mockResolvedValue({
+      providerSettings: {
+        activeProvider: 'openrouter' as const,
+        providers: {
+          openrouter: {
+            apiKey: '',
+            model: 'cloud-model',
+            modelTitle: 'Cloud',
+          },
+          generalcompute: {
+            apiKey: '',
+            model: '',
+            modelTitle: '',
+          },
+        },
+      },
+      webSearchSettings: {
+        masterEnabled: false,
+        providers: {
+          tavily: { apiKey: '', enabled: false },
+          exa: { apiKey: '', enabled: false },
+          brave: { apiKey: '', enabled: false },
+          serpapi: { apiKey: '', enabled: false },
+        },
+      },
+    });
+
+    await hydrateAndEnableCloudSettings();
+
+    expect(setProviderSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: expect.objectContaining({
+          openrouter: expect.objectContaining({
+            apiKey: 'local-or-key',
+            model: 'cloud-model',
+          }),
+          generalcompute: expect.objectContaining({
+            apiKey: 'local-gc-key',
+          }),
+        }),
+      }),
+    );
+    expect(setWebSearchSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: expect.objectContaining({
+          tavily: expect.objectContaining({ apiKey: 'local-tavily' }),
+          exa: expect.objectContaining({ apiKey: 'local-exa' }),
+        }),
+      }),
+    );
+  });
+
+  it('skips hydrate wipe when cloud provider payload is empty object', async () => {
+    getAppSettingsMock.mockResolvedValue({
+      providerSettings: {} as never,
+      webSearchSettings: {} as never,
+    });
+
+    await hydrateAndEnableCloudSettings();
+
+    const providerArg = setProviderSettingsMock.mock.calls[0]?.[0] as
+      | { providers?: { openrouter?: { apiKey?: string } } }
+      | undefined;
+    if (providerArg?.providers?.openrouter) {
+      expect(providerArg.providers.openrouter.apiKey).not.toBe('');
+    }
+    const webArg = setWebSearchSettingsMock.mock.calls[0]?.[0] as
+      | { providers?: { tavily?: { apiKey?: string } } }
+      | undefined;
+    if (webArg?.providers?.tavily) {
+      expect(webArg.providers.tavily.apiKey).not.toBe('');
+    }
+  });
+
+  it('applies non-empty cloud secrets over local', async () => {
+    getAppSettingsMock.mockResolvedValue(cloudSnapshot);
+
+    await hydrateAndEnableCloudSettings();
+
+    expect(setProviderSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: expect.objectContaining({
+          openrouter: expect.objectContaining({
+            apiKey: 'cloud-key',
+          }),
+        }),
+      }),
+    );
+    expect(setWebSearchSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: expect.objectContaining({
+          tavily: expect.objectContaining({ apiKey: 't' }),
+        }),
+      }),
     );
   });
 });

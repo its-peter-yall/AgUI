@@ -466,7 +466,8 @@ export function SettingsPage() {
 			{/* Footer */}
 			<footer className="border-t py-4 text-center text-sm text-muted-foreground">
 				<p>
-					A2UI Settings Panel &mdash; configuration persists in Local Storage
+					A2UI Settings Panel &mdash; configuration persists in Local Storage,
+					or MongoDB Atlas when connected
 				</p>
 			</footer>
 		</div>

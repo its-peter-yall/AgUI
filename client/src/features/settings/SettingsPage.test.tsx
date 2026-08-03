@@ -70,6 +70,13 @@ function renderSettingsPage() {
 }
 
 describe('SettingsPage', () => {
+  it('footer mentions Atlas as well as local storage', () => {
+    renderSettingsPage();
+    expect(
+      screen.getByText(/Local Storage[\s\S]*MongoDB Atlas|MongoDB Atlas[\s\S]*Local Storage/i),
+    ).toBeInTheDocument();
+  });
+
   it('starts with every top-level section collapsed', () => {
     renderSettingsPage();
 
