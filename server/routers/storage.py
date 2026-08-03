@@ -4,16 +4,16 @@ FILE: storage.py
 LOCATION: server/routers/storage.py
 ============================================================================
 PURPOSE:
-    REST endpoints for storage status, connect, and disconnect lifecycle.
+    REST endpoints for storage lifecycle, migrate, and app settings.
 ROLE IN PROJECT:
-    Exposes local-only Mongo connection controls and deployment-aware status.
+    Exposes local-only Mongo connection controls and cloud-backed settings.
     - GET /settings/storage/status
-    - POST /settings/storage/connect (local only)
-    - POST /settings/storage/disconnect (local only)
+    - POST /settings/storage/connect|disconnect|migrate (local only)
+    - GET/PUT /settings/storage/app-settings (Mongo active)
 DEPENDENCIES:
     - External: fastapi
-    - Internal: server.database.mongo_client, server.database.storage_mode,
-      server.schemas.storage
+    - Internal: server.database.mongo_client, server.database.migrate_to_mongo,
+      server.database.storage_mode, server.schemas.storage
 USAGE:
     app.include_router(storage_router)
 ============================================================================
@@ -25,13 +25,28 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 
+from server.database.migrate_to_mongo import (
+    MigrationError,
+    migrate_to_mongo,
+)
 from server.database.mongo_client import (
     MongoConfigurationError,
     MongoUnavailableError,
 )
-from server.database.storage_mode import DeploymentMode, StorageContext
+from server.database.persistence import DB_PATH
+from server.database.storage_mode import (
+    DeploymentMode,
+    StorageBackend,
+    StorageContext,
+)
+from server.graph.build import CHECKPOINT_DB_PATH
 from server.schemas.storage import (
+    AppSettingsResponse,
+    AppSettingsUpdate,
+    CollectionMigrationResponse,
     StorageConnectRequest,
+    StorageMigrateRequest,
+    StorageMigrateResponse,
     StorageStatusResponse,
 )
 
@@ -86,6 +101,14 @@ def _require_idle(request: Request) -> None:
         )
 
 
+def _require_mongo(context: StorageContext) -> None:
+    if context.active_backend != StorageBackend.MONGO:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MongoDB storage is not active",
+        )
+
+
 @router.get(
     "/status",
     response_model=StorageStatusResponse,
@@ -137,3 +160,104 @@ async def disconnect_storage(request: Request) -> StorageStatusResponse:
     _require_idle(request)
     await run_in_threadpool(context.disconnect)
     return _status(context)
+
+
+@router.get(
+    "/app-settings",
+    response_model=AppSettingsResponse,
+    summary="Read cloud-backed application settings",
+)
+async def get_app_settings(request: Request) -> AppSettingsResponse:
+    context = _storage(request)
+    _require_mongo(context)
+    provider = await run_in_threadpool(
+        context.app_settings.get_provider_settings
+    )
+    search = await run_in_threadpool(
+        context.app_settings.get_web_search_settings
+    )
+    return AppSettingsResponse(
+        provider_settings=provider,
+        web_search_settings=search,
+    )
+
+
+@router.put(
+    "/app-settings",
+    response_model=AppSettingsResponse,
+    summary="Write cloud-backed application settings",
+)
+async def put_app_settings(
+    payload: AppSettingsUpdate,
+    request: Request,
+) -> AppSettingsResponse:
+    context = _storage(request)
+    _require_mongo(context)
+    await run_in_threadpool(
+        context.app_settings.put_provider_settings,
+        payload.provider_settings,
+    )
+    await run_in_threadpool(
+        context.app_settings.put_web_search_settings,
+        payload.web_search_settings,
+    )
+    return AppSettingsResponse(
+        provider_settings=payload.provider_settings,
+        web_search_settings=payload.web_search_settings,
+    )
+
+
+@router.post(
+    "/migrate",
+    response_model=StorageMigrateResponse,
+    summary="Copy local SQLite data into active MongoDB",
+)
+async def migrate_storage(
+    payload: StorageMigrateRequest,
+    request: Request,
+) -> StorageMigrateResponse:
+    context = _storage(request)
+    _require_local(context)
+    _require_idle(request)
+    _require_mongo(context)
+    mongo = context.mongo_connection
+    controller = context.checkpointer_controller
+    if mongo is None or controller is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MongoDB storage is not active",
+        )
+    try:
+        summary = await migrate_to_mongo(
+            sqlite_path=DB_PATH,
+            checkpoint_path=CHECKPOINT_DB_PATH,
+            database=mongo.database,
+            mongo_checkpointer=controller.active_saver,
+            app_settings=context.app_settings,
+            provider_settings=payload.provider_settings,
+            web_search_settings=payload.web_search_settings,
+        )
+    except MigrationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "storage_migration_failed",
+                "collection": exc.collection,
+                "message": "Migration can be retried safely",
+            },
+        ) from exc
+    collections = {
+        name: CollectionMigrationResponse(
+            rows=item.rows,
+            matched=item.matched,
+            upserted=item.upserted,
+            modified=item.modified,
+        )
+        for name, item in summary.collections.items()
+    }
+    return StorageMigrateResponse(
+        collections=collections,
+        checkpoints=summary.checkpoints,
+        checkpoint_writes=summary.checkpoint_writes,
+        warnings=summary.warnings,
+    )

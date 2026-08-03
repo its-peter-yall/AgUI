@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -43,7 +43,26 @@ def make_storage(mode: DeploymentMode) -> SimpleNamespace:
         connect=MagicMock(),
         disconnect=MagicMock(),
         local_data_present=MagicMock(return_value=True),
+        app_settings=MagicMock(),
+        mongo_connection=None,
+        checkpointer_controller=None,
+        sqlite_path=None,
     )
+
+
+def make_connected_storage() -> SimpleNamespace:
+    storage = make_storage(DeploymentMode.LOCAL)
+    storage.connected = True
+    storage.active_backend = StorageBackend.MONGO
+    storage.mongo_db_name = "a2ui"
+    storage.mongo_connection = SimpleNamespace(
+        database=MagicMock(name="database"),
+    )
+    storage.checkpointer_controller = SimpleNamespace(
+        active_saver=MagicMock(name="mongo-saver"),
+    )
+    storage.sqlite_path = MagicMock(name="sqlite-path")
+    return storage
 
 
 def make_client(
@@ -124,6 +143,87 @@ class StorageRouterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"]["sessionIds"], ["s1"])
         storage.connect.assert_not_called()
+
+    def test_migrate_requires_local_mode_connected_mongo(self) -> None:
+        local = make_storage(DeploymentMode.LOCAL)
+        local.active_backend = StorageBackend.SQLITE
+        response = make_client(local).post(
+            "/settings/storage/migrate",
+            json={"providerSettings": {}, "webSearchSettings": {}},
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_cloud_migrate_is_forbidden(self) -> None:
+        cloud = make_storage(DeploymentMode.CLOUD)
+        response = make_client(cloud).post(
+            "/settings/storage/migrate",
+            json={"providerSettings": {}, "webSearchSettings": {}},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_app_settings_require_mongo_and_round_trip(self) -> None:
+        storage = make_connected_storage()
+        storage.app_settings.get_provider_settings.return_value = {"a": 1}
+        storage.app_settings.get_web_search_settings.return_value = {"b": 2}
+        client = make_client(storage)
+        response = client.get("/settings/storage/app-settings")
+        self.assertEqual(response.json()["providerSettings"], {"a": 1})
+        update = client.put(
+            "/settings/storage/app-settings",
+            json={
+                "providerSettings": {"a": 3},
+                "webSearchSettings": {"b": 4},
+            },
+        )
+        self.assertEqual(update.status_code, 200)
+        storage.app_settings.put_provider_settings.assert_called_once_with(
+            {"a": 3}
+        )
+        storage.app_settings.put_web_search_settings.assert_called_once_with(
+            {"b": 4}
+        )
+
+    def test_migrate_passes_browser_snapshots_once(self) -> None:
+        storage = make_connected_storage()
+        summary = SimpleNamespace(
+            collections={
+                "learning_sessions": SimpleNamespace(
+                    rows=1,
+                    matched=0,
+                    upserted=1,
+                    modified=0,
+                )
+            },
+            checkpoints=2,
+            checkpoint_writes=3,
+            warnings=["w1"],
+        )
+        with patch(
+            "server.routers.storage.migrate_to_mongo",
+            new_callable=AsyncMock,
+            return_value=summary,
+        ) as migrate:
+            response = make_client(storage).post(
+                "/settings/storage/migrate",
+                json={
+                    "providerSettings": {"activeProvider": "openrouter"},
+                    "webSearchSettings": {"masterEnabled": False},
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["checkpoints"], 2)
+        self.assertEqual(payload["warnings"], ["w1"])
+        migrate.assert_awaited_once()
+        kwargs = migrate.await_args.kwargs
+        self.assertEqual(
+            kwargs["provider_settings"],
+            {"activeProvider": "openrouter"},
+        )
+        self.assertEqual(
+            kwargs["web_search_settings"],
+            {"masterEnabled": False},
+        )
 
 
 if __name__ == "__main__":
