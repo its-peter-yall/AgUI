@@ -16,7 +16,7 @@ KEY COMPONENTS:
     - settings: Singleton instance for application-wide configuration access
 DEPENDENCIES:
     - External: python-dotenv
-    - Internal: None
+    - Internal: server.database.storage_mode
 USAGE:
     ```python
     from server.config import settings
@@ -26,27 +26,42 @@ USAGE:
 """
 
 import os
+
 from dotenv import load_dotenv
+
+from server.database.storage_mode import DeploymentMode
 
 # Load environment variables from .env file
 load_dotenv()
 
 
 class Settings:
-    OPENROUTER_BASE_URL = os.getenv(
-        "OPENROUTER_BASE_URL",
-        "https://openrouter.ai/api/v1",
-    )
-    OPENROUTER_TIMEOUT_SECONDS = float(
-        os.getenv("OPENROUTER_TIMEOUT_SECONDS", "60.0")
-    )
-    GENERALCOMPUTE_BASE_URL = os.getenv(
-        "GENERALCOMPUTE_BASE_URL",
-        "https://api.generalcompute.com/v1",
-    )
-    GENERALCOMPUTE_TIMEOUT_SECONDS = float(
-        os.getenv("GENERALCOMPUTE_TIMEOUT_SECONDS", "60.0")
-    )
+    """Environment-backed server settings."""
+
+    def __init__(self) -> None:
+        raw_mode = os.getenv("DEPLOYMENT_MODE", "local").strip().lower()
+        try:
+            self.deployment_mode = DeploymentMode(raw_mode)
+        except ValueError as exc:
+            raise RuntimeError(
+                "DEPLOYMENT_MODE must be local or cloud"
+            ) from exc
+        self.mongo_uri = os.getenv("MONGO_URI") or None
+        self.mongo_db = os.getenv("MONGO_DB") or None
+        self.OPENROUTER_BASE_URL = os.getenv(
+            "OPENROUTER_BASE_URL",
+            "https://openrouter.ai/api/v1",
+        )
+        self.OPENROUTER_TIMEOUT_SECONDS = float(
+            os.getenv("OPENROUTER_TIMEOUT_SECONDS", "60.0")
+        )
+        self.GENERALCOMPUTE_BASE_URL = os.getenv(
+            "GENERALCOMPUTE_BASE_URL",
+            "https://api.generalcompute.com/v1",
+        )
+        self.GENERALCOMPUTE_TIMEOUT_SECONDS = float(
+            os.getenv("GENERALCOMPUTE_TIMEOUT_SECONDS", "60.0")
+        )
 
 
 settings = Settings()
