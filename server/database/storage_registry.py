@@ -28,9 +28,9 @@ USAGE:
 
 from __future__ import annotations
 
+import os
 from typing import cast
 
-from server.config import settings
 from server.database.generation_artifacts import GenerationArtifactStore
 from server.database.generation_jobs import GenerationJobStore
 from server.database.generation_migrations import (
@@ -49,7 +49,19 @@ from server.database.repositories.protocols import (
 )
 from server.database.repositories.sqlite import build_sqlite_bundle
 from server.database.research_store import ResearchStore
-from server.database.storage_mode import StorageContext
+from server.database.storage_mode import DeploymentMode, StorageContext
+
+
+def _resolve_deployment_mode() -> DeploymentMode:
+    """Read deployment mode without importing server.config (cycle-safe)."""
+    raw = os.getenv("DEPLOYMENT_MODE", "local").strip().lower()
+    try:
+        return DeploymentMode(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "DEPLOYMENT_MODE must be local or cloud"
+        ) from exc
+
 
 sqlite_learning_store = LearningManager(DB_PATH)
 sqlite_job_store = GenerationJobStore(DB_PATH)
@@ -66,7 +78,7 @@ sqlite_repositories = build_sqlite_bundle(
 )
 
 storage_context = StorageContext(
-    deployment_mode=settings.deployment_mode,
+    deployment_mode=_resolve_deployment_mode(),
     sqlite_path=DB_PATH,
     sqlite_repositories=sqlite_repositories,
 )

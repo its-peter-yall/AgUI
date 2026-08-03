@@ -988,5 +988,25 @@ class GenerationJobStore:
         except (sqlite3.OperationalError, LookupError):
             pass
 
+    def set_grounding_status(
+        self,
+        session_id: str,
+        grounding_status: GroundingStatus,
+    ) -> None:
+        """Set grounding status without requiring a worker lock."""
+        with optional_transaction(self.db_path, None) as conn:
+            job = self.get_by_session(session_id, conn=conn)
+            if job is None:
+                raise GenerationJobNotFound(session_id)
+            conn.execute(
+                "UPDATE generation_jobs SET grounding_status = ?, "
+                "updated_at = ? WHERE session_id = ?",
+                (
+                    grounding_status.value,
+                    _utc_now(None).isoformat(),
+                    session_id,
+                ),
+            )
+
 
 generation_job_store = GenerationJobStore()

@@ -35,6 +35,7 @@ from server.schemas.generation import (
     GenerationLock,
     GenerationStage,
     GenerationWarning,
+    GroundingStatus,
     SourceCitation,
 )
 from server.schemas.learning import (
@@ -279,6 +280,11 @@ class GenerationJobRepository(Protocol):
         session_id: str,
         **increments: int,
     ) -> GenerationCounts: ...
+    def set_grounding_status(
+        self,
+        session_id: str,
+        grounding_status: GroundingStatus,
+    ) -> None: ...
     def mark_failed(
         self,
         session_id: str,

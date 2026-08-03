@@ -139,109 +139,40 @@ BatchSpec = namedtuple("BatchSpec", ["start", "size"])
 
 def _append_job_warning(session_id: str, warning: GenerationWarning) -> None:
     """Append a safe warning to the generation job public surface."""
-    try:
-        from datetime import datetime, timezone
+    generation_job_store.append_warning(session_id, warning)
 
-        from server.database.sqlite_utils import (
-            canonical_json,
-            optional_transaction,
-        )
 
+def _bump_job_counts(session_id: str, **increments: Any) -> None:
+    """Best-effort count/grounding update via repository (no direct SQL)."""
+    grounding_status = increments.pop("grounding_status", None)
+    mapped: dict[str, int] = {}
+    absolute_keys = {"topics_total", "briefs_ready"}
+    needs_job = bool(absolute_keys & increments.keys())
+    job = None
+    if needs_job:
         job = generation_job_store.get_by_session(session_id)
         if job is None:
             return
-        warnings = [
-            w.model_dump(mode="json") if hasattr(w, "model_dump") else w
-            for w in list(job.warnings)
-        ]
-        warnings.append(warning.model_dump(mode="json"))
-        with optional_transaction(generation_job_store.db_path, None) as conn:
-            conn.execute(
-                """
-                UPDATE generation_jobs
-                SET warnings_json = ?, updated_at = ?
-                WHERE session_id = ?
-                """,
-                (
-                    canonical_json(warnings),
-                    datetime.now(timezone.utc).isoformat(),
-                    session_id,
-                ),
-            )
-    except Exception:
-        logger.debug("warning append skipped for session %s", session_id)
-
-
-def _bump_job_counts(
-    session_id: str,
-    *,
-    topics_total: Optional[int] = None,
-    briefs_ready: Optional[int] = None,
-    topics_ready_delta: int = 0,
-    topics_failed_delta: int = 0,
-    research_sections: Optional[int] = None,
-    sources: Optional[int] = None,
-    grounding_status: Optional[GroundingStatus] = None,
-) -> None:
-    """Best-effort update of generation job counts without requiring a lock."""
-    try:
-        from datetime import datetime, timezone
-
-        from server.database.sqlite_utils import (
-            canonical_json,
-            optional_transaction,
+    for key, value in increments.items():
+        if value is None:
+            continue
+        if key.endswith("_delta"):
+            field = key[: -len("_delta")]
+            mapped[field] = mapped.get(field, 0) + int(value)
+            continue
+        if key in absolute_keys and job is not None:
+            current = int(getattr(job.counts, key))
+            delta = int(value) - current
+            if delta > 0:
+                mapped[key] = mapped.get(key, 0) + delta
+            continue
+        mapped[key] = mapped.get(key, 0) + int(value)
+    if mapped:
+        generation_job_store.bump_counts(session_id, **mapped)
+    if grounding_status is not None:
+        generation_job_store.set_grounding_status(
+            session_id, grounding_status
         )
-        from server.schemas.generation import GenerationCounts
-
-        job = generation_job_store.get_by_session(session_id)
-        if job is None:
-            return
-        counts = job.counts
-        updates: dict[str, int] = {}
-        if topics_total is not None:
-            updates["topics_total"] = topics_total
-        if briefs_ready is not None:
-            updates["briefs_ready"] = briefs_ready
-        if topics_ready_delta:
-            updates["topics_ready"] = counts.topics_ready + topics_ready_delta
-        if topics_failed_delta:
-            updates["topics_failed"] = counts.topics_failed + topics_failed_delta
-        if research_sections is not None:
-            updates["research_sections"] = research_sections
-        if sources is not None:
-            updates["sources"] = sources
-        if updates:
-            counts = counts.model_copy(update=updates)
-        with optional_transaction(generation_job_store.db_path, None) as conn:
-            if grounding_status is not None:
-                conn.execute(
-                    """
-                    UPDATE generation_jobs
-                    SET counts_json = ?, grounding_status = ?, updated_at = ?
-                    WHERE session_id = ?
-                    """,
-                    (
-                        canonical_json(counts),
-                        grounding_status.value,
-                        datetime.now(timezone.utc).isoformat(),
-                        session_id,
-                    ),
-                )
-            else:
-                conn.execute(
-                    """
-                    UPDATE generation_jobs
-                    SET counts_json = ?, updated_at = ?
-                    WHERE session_id = ?
-                    """,
-                    (
-                        canonical_json(counts),
-                        datetime.now(timezone.utc).isoformat(),
-                        session_id,
-                    ),
-                )
-    except Exception:
-        logger.debug("count bump skipped for session %s", session_id)
 
 
 def select_topic_batch(cursor: int, total_topics: int) -> BatchSpec:
@@ -347,20 +278,10 @@ async def initialize_generation_node(
         )
 
     # Persist resolved mode once on the learning session row.
-    try:
-        learning_manager.update_session_resolved_mode(
-            session_id, resolved_mode
-        )
-    except Exception:
-        try:
-            # Fallback: some managers expose generic session update.
-            learning_manager.update_learning_session(
-                session_id, resolved_mode=resolved_mode
-            )
-        except Exception:
-            logger.debug(
-                "Could not persist resolved_mode for session %s", session_id
-            )
+    learning_manager.update_session_resolved_mode(
+        session_id,
+        resolved_mode,
+    )
 
     search_ctx = _get_search_context(runtime)
     web_enabled = state.get("web_search_enabled")

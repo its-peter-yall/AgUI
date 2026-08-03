@@ -22,9 +22,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from server.graph import nodes
 from server.graph.build import build_graph
 from server.graph.nodes import fan_out_generators, select_topic_batch
-from server.schemas.generation import GenerationStage
+from server.schemas.generation import GenerationStage, GenerationWarning
 from server.schemas.learning import CourseOutline, TopicNode
 from server.schemas.llm import LLMContext
 from server.schemas.search import SearchContext
@@ -32,6 +33,17 @@ from server.schemas.search import SearchContext
 
 class StagedGraphTests(unittest.IsolatedAsyncioTestCase):
     """Tests staged graph route and batch orchestration."""
+
+    @patch("server.graph.nodes.generation_job_store")
+    def test_append_job_warning_uses_repository(self, jobs) -> None:
+        warning = GenerationWarning(code="slow", message="Provider slow")
+        nodes._append_job_warning("s1", warning)
+        jobs.append_warning.assert_called_once_with("s1", warning)
+
+    @patch("server.graph.nodes.generation_job_store")
+    def test_bump_job_counts_uses_repository(self, jobs) -> None:
+        nodes._bump_job_counts("s1", sources=2)
+        jobs.bump_counts.assert_called_once_with("s1", sources=2)
 
     async def test_web_off_skips_research_and_runs_three_then_ten(self) -> None:
         calls: list[str] = []
