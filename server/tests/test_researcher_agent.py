@@ -62,6 +62,64 @@ class ResearcherAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source ids", prompt)
         self.assertIn(CoverageTheme.CURRENT_VERSIONS.value, prompt)
 
+    async def test_analyze_query_includes_budget_in_user_message(self) -> None:
+        agent = ResearcherAgent()
+        plan = ResearchPlan(
+            audience="Learner",
+            provisional_concept_count=4,
+            coverage=[],
+            initial_queries=["q1"],
+        )
+        budget_text = "remaining search_calls: 5"
+        with patch.object(
+            agent, "generate", new=AsyncMock(return_value=plan)
+        ) as gen:
+            await agent.analyze_query(
+                query="GraphRAG",
+                resolved_mode="lite",
+                llm_context=LLMContext(api_key="k", model="m"),
+                budget_context=budget_text,
+            )
+        msg = gen.await_args.kwargs["user_message"]
+        self.assertIn(budget_text, msg)
+        self.assertIn("lite", msg)
+
+    async def test_synthesize_includes_target_theme_and_budget(self) -> None:
+        from server.schemas.research import ResearchIteration
+
+        agent = ResearcherAgent()
+        draft = ResearchIteration(
+            theme="fundamentals",
+            section_markdown="Evidence.",
+            source_ids=[],
+            conflicts=[],
+            follow_up_queries=[],
+            coverage_updates=[],
+        )
+        plan = ResearchPlan(
+            audience="Learner",
+            provisional_concept_count=3,
+            coverage=[],
+            initial_queries=["q"],
+        )
+        with patch.object(
+            agent, "generate", new=AsyncMock(return_value=draft)
+        ) as gen:
+            await agent.synthesize_iteration(
+                query="GraphRAG",
+                plan=plan,
+                coverage=[],
+                untrusted_source_context="SOURCES BEGIN\nSOURCES END",
+                llm_context=LLMContext(api_key="k", model="m"),
+                target_theme="fundamentals",
+                budget_context="remaining llm_turns: 2",
+                uncovered_themes=["fundamentals", "migrations"],
+            )
+        msg = gen.await_args.kwargs["user_message"]
+        self.assertIn("target theme: fundamentals", msg.lower())
+        self.assertIn("remaining llm_turns: 2", msg)
+        self.assertIn("uncovered", msg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

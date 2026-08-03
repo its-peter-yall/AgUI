@@ -422,6 +422,10 @@ def get_learning_sessions(
         typed_sessions: list[LearningSessionSummary] = []
         for s in sessions:
             row = dict(s)
+            row.setdefault("total_nodes", 0)
+            row.setdefault("completed_nodes", 0)
+            row.setdefault("progress_percent", 0)
+            row.setdefault("status", "in_progress")
             public_job = job_map.get(s["id"])
             if public_job is not None:
                 row["generation_stage"] = public_job.stage.value

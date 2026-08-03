@@ -94,7 +94,7 @@ class M1BudgetLedgerTests(unittest.TestCase):
         self.assertEqual(snap.sources, 4)
         self.assertEqual(snap.context_chars, 300)
         self.assertEqual(snap.search_calls, 5)
-        clock[0] = 501.5  # total elapsed 45.5 > 45
+        clock[0] = 547.5  # total elapsed 91.5 > 90
         with self.assertRaises(ResearchBudgetExceeded) as raised:
             ledger.check_time()
         self.assertEqual(raised.exception.limit_name, "elapsed_seconds")
@@ -106,7 +106,30 @@ class M1BudgetLedgerTests(unittest.TestCase):
             clock=lambda: clock[0],
         )
         clock[0] = 40.0
-        self.assertAlmostEqual(ledger.remaining_seconds(), 5.0, places=2)
+        self.assertAlmostEqual(ledger.remaining_seconds(), 50.0, places=2)
+
+    def test_finalization_and_elapsed_clamp_round_trip(self) -> None:
+        clock = [100.0]
+        ledger = ResearchBudgetLedger(
+            resolve_research_budget("lite", 3),
+            clock=lambda: clock[0],
+        )
+        ledger.reserve_finalization_turn()
+        clock[0] = 300.0
+
+        cursor = ledger.to_cursor(iteration=2)
+        self.assertEqual(cursor.finalization_turns, 1)
+        self.assertLessEqual(cursor.elapsed_seconds, 180.0)
+
+        restored = ResearchBudgetLedger.from_cursor(
+            resolve_research_budget("lite", 3),
+            cursor,
+            clock=lambda: clock[0],
+        )
+        self.assertEqual(restored.usage_snapshot().finalization_turns, 1)
+        with self.assertRaises(ResearchBudgetExceeded) as raised:
+            restored.reserve_finalization_turn()
+        self.assertEqual(raised.exception.limit_name, "finalization_turns")
 
 
 class M2M3CoverageTests(unittest.TestCase):

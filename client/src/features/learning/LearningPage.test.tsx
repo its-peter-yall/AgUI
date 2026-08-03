@@ -291,4 +291,18 @@ describe('LearningPage controls', () => {
       }),
     );
   });
+
+  it('hides generation status panel when stage is COMPLETE', async () => {
+    const completedSession = {
+      ...runningSession,
+      generation: {
+        ...runningSession.generation!,
+        stage: 'COMPLETE' as const,
+      },
+    };
+    renderPage(completedSession);
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: /generation status/i })).not.toBeInTheDocument();
+    });
+  });
 });

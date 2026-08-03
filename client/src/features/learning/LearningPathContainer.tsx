@@ -823,21 +823,12 @@ export function LearningPathContainer({
 								aria-roledescription="carousel"
 								aria-label="Learning path carousel"
 							>
-								{/* Slide counter + TOC (M11: available whenever nodes exist) */}
+								{/* Slide counter */}
 								<div className="flex justify-center items-center gap-3 mb-4 text-sm text-muted-foreground">
 									<span>
 										Topic {carouselState.currentIndex + 1} of{" "}
 										{session.nodes.length}
 									</span>
-									{session.nodes.length > 0 && (
-										<button
-											type="button"
-											onClick={() => setIsTOCOpen(true)}
-											className="px-3 py-1 rounded-md border border-border/80 text-xs font-medium hover:bg-accent/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-										>
-											See all Topics
-										</button>
-									)}
 								</div>
 
 								{/* Single ConceptCard with direction-aware slide animation */}

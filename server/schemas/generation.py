@@ -85,6 +85,7 @@ class ResearchCursor(BaseModel):
     completed_themes: list[str] = Field(default_factory=list, max_length=20)
     search_calls: int = Field(default=0, ge=0, le=20)
     llm_turns: int = Field(default=0, ge=0, le=10)
+    finalization_turns: int = Field(default=0, ge=0, le=1)
     results_examined: int = Field(default=0, ge=0, le=120)
     provider_bytes: int = Field(default=0, ge=0, le=5_000_000)
     excerpt_chars: int = Field(default=0, ge=0, le=100_000)

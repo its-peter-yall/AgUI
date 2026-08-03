@@ -20,6 +20,9 @@
  *
  * DEPENDENCIES:
  *    - External: react, react-router-dom, lucide-react, framer-motion
+ *
+ * DEPENDENCIES:
+ *    - External: react, react-router-dom, lucide-react, framer-motion
  *    - Internal: @/hooks/useTheme, @/features/settings/OpenRouterSettingsPanel, @/lib/utils
  *
  * USAGE:
@@ -43,6 +46,9 @@ import {
 	MessageCircle,
 	Bot,
 	Database,
+	Palette,
+	KeyRound,
+	Globe,
 } from "lucide-react";
 
 import { useTheme } from "@/hooks/useTheme";
@@ -291,7 +297,15 @@ export function SettingsPage() {
 				<SettingsSection
 					headingId="appearance-heading"
 					contentId="appearance-content"
-					title="Appearance"
+					title={
+						<span className="flex items-center gap-2">
+							<Palette
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
+							Appearance
+						</span>
+					}
 					isExpanded={expandedSections.appearance}
 					onToggle={() => toggleSection("appearance")}
 				>
@@ -367,7 +381,15 @@ export function SettingsPage() {
 				<SettingsSection
 					headingId="ai-provider-heading"
 					contentId="ai-provider-content"
-					title="AI Provider Credentials"
+					title={
+						<span className="flex items-center gap-2">
+							<KeyRound
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
+							AI Provider Credentials
+						</span>
+					}
 					isExpanded={expandedSections["ai-provider"]}
 					onToggle={() => toggleSection("ai-provider")}
 				>
@@ -403,7 +425,15 @@ export function SettingsPage() {
 				<SettingsSection
 					headingId="web-search-heading"
 					contentId="web-search-content"
-					title="Web Search"
+					title={
+						<span className="flex items-center gap-2">
+							<Globe
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
+							Web Search
+						</span>
+					}
 					isExpanded={expandedSections["web-search"]}
 					onToggle={() => toggleSection("web-search")}
 				>

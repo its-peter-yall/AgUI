@@ -825,12 +825,16 @@ class LearningSessionSummary(BaseModel):
     query: str = Field(..., description="Original learning query")
     course_title: str = Field(..., description="Generated course title")
     status: Literal["in_progress", "completed"] = Field(
-        ..., description="Session status"
+        default="in_progress", description="Session status"
     )
-    progress_percent: int = Field(..., description="Progress percentage", ge=0, le=100)
-    total_nodes: int = Field(..., description="Total number of concept nodes", ge=0)
+    progress_percent: int = Field(
+        default=0, description="Progress percentage", ge=0, le=100
+    )
+    total_nodes: int = Field(
+        default=0, description="Total number of concept nodes", ge=0
+    )
     completed_nodes: int = Field(
-        ..., description="Number of completed concept nodes", ge=0
+        default=0, description="Number of completed concept nodes", ge=0
     )
     last_active_node_title: Optional[str] = Field(
         default=None, description="Title of the last active node for resume"
@@ -876,11 +880,15 @@ class SessionProgress(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     progress_percent: int = Field(
-        ..., description="Session progress percentage", ge=0, le=100
+        default=0, description="Session progress percentage", ge=0, le=100
     )
-    status: str = Field(..., description="Session status")
-    completed_nodes: int = Field(..., description="Completed concept nodes", ge=0)
-    total_nodes: int = Field(..., description="Total concept nodes", ge=0)
+    status: str = Field(default="in_progress", description="Session status")
+    completed_nodes: int = Field(
+        default=0, description="Completed concept nodes", ge=0
+    )
+    total_nodes: int = Field(
+        default=0, description="Total concept nodes", ge=0
+    )
     last_active_node_id: Optional[str] = Field(
         default=None,
         description="Identifier of the last active node",

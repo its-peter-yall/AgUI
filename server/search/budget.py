@@ -28,7 +28,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional
 
 if TYPE_CHECKING:
     from server.schemas.generation import ResearchCursor
@@ -74,6 +74,7 @@ class ResearchBudgetUsage:
     provider_bytes: int = 0
     excerpt_chars: int = 0
     context_chars: int = 0
+    finalization_turns: int = 0
     started_at: float = 0.0
 
 
@@ -89,6 +90,8 @@ _ABS_MAX = {
     "max_context_chars": 100_000,
     "max_content_chars_per_hit": 8_000,
 }
+_MAX_CURSOR_ELAPSED_SECONDS = float(_ABS_MAX["max_elapsed_seconds"])
+_MAX_FINALIZATION_TURNS = 1
 
 
 def resolve_research_budget(
@@ -113,24 +116,24 @@ def resolve_research_budget(
     concepts = max(3, min(30, int(provisional_concept_count)))
     base_calls = 3 + math.ceil(concepts / 2)
     if normalized_mode == "lite":
-        max_search_calls = min(6, max(4, base_calls))
-        max_llm_turns = 4
-        max_elapsed_seconds = 45.0
-        max_results_examined = 40
-        max_sources = 12
-        max_provider_bytes = 1_000_000
-        max_excerpt_chars = 40_000
-        max_context_chars = 40_000
-        max_content_chars_per_hit = 4_000
+        max_search_calls = min(8, max(5, base_calls))
+        max_llm_turns = 6
+        max_elapsed_seconds = 90.0
+        max_results_examined = 60
+        max_sources = 18
+        max_provider_bytes = 2_000_000
+        max_excerpt_chars = 60_000
+        max_context_chars = 60_000
+        max_content_chars_per_hit = 6_000
     else:
-        max_search_calls = min(14, max(6, base_calls))
-        max_llm_turns = 8
-        max_elapsed_seconds = 120.0
-        max_results_examined = 100
-        max_sources = 25
-        max_provider_bytes = 3_000_000
-        max_excerpt_chars = 80_000
-        max_context_chars = 80_000
+        max_search_calls = min(18, max(8, base_calls))
+        max_llm_turns = 10
+        max_elapsed_seconds = 180.0
+        max_results_examined = 120
+        max_sources = 40
+        max_provider_bytes = 5_000_000
+        max_excerpt_chars = 100_000
+        max_context_chars = 100_000
         max_content_chars_per_hit = 8_000
 
     return ResearchBudget(
@@ -163,6 +166,31 @@ def resolve_research_budget(
     )
 
 
+def format_budget_for_prompt(snapshot: dict[str, Any]) -> str:
+    """Render remaining budget snapshot as LLM prompt text."""
+    caps = snapshot.get("mode_caps") or {}
+    return (
+        "Research budget (hard limits):\n"
+        f"- remaining search_calls: {snapshot.get('search_calls')}/"
+        f"{caps.get('max_search_calls')}\n"
+        f"- remaining llm_turns (research only, excludes final report): "
+        f"{snapshot.get('llm_turns')}/{caps.get('max_llm_turns')}\n"
+        f"- remaining sources: {snapshot.get('sources')}/"
+        f"{caps.get('max_sources')}\n"
+        f"- remaining results_examined: {snapshot.get('results_examined')}/"
+        f"{caps.get('max_results_examined')}\n"
+        f"- remaining elapsed_seconds: "
+        f"{float(snapshot.get('elapsed_seconds', 0)):.1f}/"
+        f"{caps.get('max_elapsed_seconds')}\n"
+        f"- finalization_turns reserved: "
+        f"{snapshot.get('finalization_turns')}\n"
+        "Plan coverage and queries to finish within remaining budget. "
+        "Prefer breadth across uncovered required themes over repeating "
+        "themes. If evidence is missing, mark explicit_unknown rather "
+        "than looping."
+    )
+
+
 class ResearchBudgetLedger:
     """Mutable hard-stop ledger for one research job."""
 
@@ -183,6 +211,9 @@ class ResearchBudgetLedger:
         self._provider_bytes = usage.provider_bytes if usage else 0
         self._excerpt_chars = usage.excerpt_chars if usage else 0
         self._context_chars = usage.context_chars if usage else 0
+        self._finalization_turns = (
+            usage.finalization_turns if usage else 0
+        )
         self._started_at = started
 
     def check_time(self) -> None:
@@ -212,6 +243,12 @@ class ResearchBudgetLedger:
             limit=self.budget.max_llm_turns,
             setter=lambda value: setattr(self, "_llm_turns", value),
         )
+
+    def reserve_finalization_turn(self) -> None:
+        """Reserve one terminal LLM turn outside normal research limits."""
+        if self._finalization_turns >= _MAX_FINALIZATION_TURNS:
+            raise ResearchBudgetExceeded("finalization_turns")
+        self._finalization_turns += 1
 
     def reserve_results(self, amount: int) -> None:
         self._reserve(
@@ -268,8 +305,37 @@ class ResearchBudgetLedger:
             provider_bytes=self._provider_bytes,
             excerpt_chars=self._excerpt_chars,
             context_chars=self._context_chars,
+            finalization_turns=self._finalization_turns,
             started_at=self._started_at,
         )
+
+    def remaining_snapshot(self) -> dict[str, Any]:
+        """Compact remaining budget for LLM prompt injection."""
+        usage = self.usage_snapshot()
+        return {
+            "search_calls": max(
+                0, self.budget.max_search_calls - usage.search_calls
+            ),
+            "llm_turns": max(
+                0, self.budget.max_llm_turns - usage.llm_turns
+            ),
+            "sources": max(0, self.budget.max_sources - usage.sources),
+            "results_examined": max(
+                0,
+                self.budget.max_results_examined - usage.results_examined,
+            ),
+            "elapsed_seconds": max(0.0, self.remaining_seconds()),
+            "finalization_turns": max(
+                0, 1 - int(getattr(usage, "finalization_turns", 0) or 0)
+            ),
+            "mode_caps": {
+                "max_search_calls": self.budget.max_search_calls,
+                "max_llm_turns": self.budget.max_llm_turns,
+                "max_sources": self.budget.max_sources,
+                "max_results_examined": self.budget.max_results_examined,
+                "max_elapsed_seconds": self.budget.max_elapsed_seconds,
+            },
+        }
 
     def to_cursor(
         self,
@@ -294,7 +360,10 @@ class ResearchBudgetLedger:
             excerpt_chars=self._excerpt_chars,
             sources=self._sources,
             context_chars=self._context_chars,
-            elapsed_seconds=self._elapsed(),
+            finalization_turns=self._finalization_turns,
+            elapsed_seconds=min(
+                self._elapsed(), _MAX_CURSOR_ELAPSED_SECONDS
+            ),
         )
 
     @classmethod
@@ -333,6 +402,9 @@ class ResearchBudgetLedger:
             provider_bytes=cursor.provider_bytes,
             excerpt_chars=cursor.excerpt_chars,
             context_chars=restored_context,
+            finalization_turns=int(
+                getattr(cursor, "finalization_turns", 0) or 0
+            ),
             started_at=started_at,
         )
         return cls(budget, clock=active_clock, usage=usage)

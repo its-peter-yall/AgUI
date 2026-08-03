@@ -211,7 +211,59 @@ class MongoLearningRepository:
             safe_sort,
             direction,
         ).skip(offset).limit(limit)
-        rows = [document_to_row(item) or {} for item in cursor]
+        rows = []
+        for item in cursor:
+            row = document_to_row(item) or {}
+            sid = row.get("id")
+            if sid:
+                raw_total = self._nodes.count_documents(
+                    {"learning_session_id": sid}
+                )
+                raw_completed = self._nodes.count_documents(
+                    {
+                        "learning_session_id": sid,
+                        "status": NodeStatus.COMPLETED.value,
+                    }
+                )
+                raw_rev = self._revisions.count_documents(
+                    {"original_session_id": sid}
+                )
+                total = (
+                    int(raw_total)
+                    if isinstance(raw_total, (int, float))
+                    else 0
+                )
+                completed = (
+                    int(raw_completed)
+                    if isinstance(raw_completed, (int, float))
+                    else 0
+                )
+                rev_count = (
+                    int(raw_rev)
+                    if isinstance(raw_rev, (int, float))
+                    else 0
+                )
+                last_active_id = row.get("last_active_node_id")
+                last_title = None
+                if last_active_id:
+                    last_node = self._nodes.find_one(
+                        {"_id": last_active_id},
+                        {"title": 1},
+                    )
+                    if isinstance(last_node, dict):
+                        last_title = last_node.get("title")
+                row["total_nodes"] = total
+                row["completed_nodes"] = completed
+                row["progress_percent"] = _calculate_progress_percent(
+                    completed, total
+                )
+                row["revision_count"] = rev_count
+                row["last_active_node_title"] = last_title
+                if total > 0 and completed == total:
+                    row["status"] = "completed"
+                elif "status" not in row or not row["status"]:
+                    row["status"] = "in_progress"
+            rows.append(row)
         return rows, self._sessions.count_documents(query)
 
     def update_session_resolved_mode(

@@ -29,6 +29,7 @@ from server.database.repositories.mongo_learning import (
     MongoLearningRepository,
 )
 from server.schemas.learning import (
+    LearningSessionSummary,
     NodeStatus,
     QuizCard,
     QuizOption,
@@ -118,7 +119,13 @@ class MongoLearningTests(unittest.TestCase):
         collection.count_documents.return_value = 1
         cursor = collection.find.return_value
         cursor.sort.return_value.skip.return_value.limit.return_value = [
-            {"_id": "s1", "query": "q"}
+            {
+                "_id": "s1",
+                "query": "q",
+                "course_title": "Title",
+                "created_at": "2026-08-03T11:00:00Z",
+                "updated_at": "2026-08-03T11:00:00Z",
+            }
         ]
 
         sessions, total = self.repository.get_sessions_list(
@@ -132,6 +139,10 @@ class MongoLearningTests(unittest.TestCase):
         cursor.sort.assert_called_once_with("updated_at", 1)
         self.assertEqual(total, 1)
         self.assertEqual(sessions[0]["id"], "s1")
+        self.assertIn("total_nodes", sessions[0])
+        self.assertIn("completed_nodes", sessions[0])
+        summary = LearningSessionSummary.model_validate(sessions[0])
+        self.assertEqual(summary.id, "s1")
 
     def test_node_status_update_uses_current_status_compare(self) -> None:
         nodes = self.database["concept_nodes"]

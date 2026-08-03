@@ -458,7 +458,7 @@ export function LearningPage() {
 							<SettingsButton />
 						</nav>
 					</div>
-					{session?.generation && (
+					{session?.generation && session.generation.stage !== "COMPLETE" && (
 						<div className="pb-3">
 							<GenerationStatusPanel
 								generation={session.generation}
