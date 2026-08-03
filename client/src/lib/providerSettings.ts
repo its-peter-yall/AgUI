@@ -79,6 +79,104 @@ const EMPTY_CONFIG: ProviderConfig = {
 	},
 };
 
+const VALID_EFFORTS = new Set<ThinkingEffort>([
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
+
+function parseThinking(raw: unknown): ThinkingConfig | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const t = raw as Partial<ThinkingConfig>;
+	const effort =
+		typeof t.effort === "string" &&
+		VALID_EFFORTS.has(t.effort as ThinkingEffort)
+			? (t.effort as ThinkingEffort)
+			: "high";
+	return {
+		enabled: Boolean(t.enabled),
+		effort,
+	};
+}
+
+function parseAgentModelSelection(
+	raw: unknown,
+): AgentModelSelection | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const entry = raw as Partial<AgentModelSelection>;
+	if (typeof entry.modelId !== "string" || !entry.modelId.trim()) {
+		return undefined;
+	}
+	const modelProvider =
+		entry.modelProvider === "generalcompute"
+			? "generalcompute"
+			: entry.modelProvider === "openrouter"
+				? "openrouter"
+				: undefined;
+	return {
+		modelId: entry.modelId,
+		modelTitle:
+			typeof entry.modelTitle === "string" ? entry.modelTitle : undefined,
+		modelProvider,
+		thinking: parseThinking(entry.thinking),
+	};
+}
+
+function parseAgentModels(
+	raw: unknown,
+): Partial<Record<AgentRole, AgentModelSelection>> | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const out: Partial<Record<AgentRole, AgentModelSelection>> = {};
+	const src = raw as Record<string, unknown>;
+	for (const role of AGENT_ROLES) {
+		const parsed = parseAgentModelSelection(src[role]);
+		if (parsed) out[role] = parsed;
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function areAgentModelsConfigured(config: ProviderConfig): boolean {
+	const map = config.agentModels;
+	if (!map) return false;
+	return AGENT_ROLES.every((role) => {
+		const id = map[role]?.modelId;
+		return typeof id === "string" && id.trim().length > 0;
+	});
+}
+
+export function getAgentModelSelection(
+	config: ProviderConfig,
+	role: AgentRole,
+): AgentModelSelection | undefined {
+	return config.agentModels?.[role];
+}
+
+export function setAgentModelSelection(
+	provider: AIProvider,
+	role: AgentRole,
+	selection: AgentModelSelection,
+): void {
+	const settings = getProviderSettings();
+	const current = settings.providers[provider];
+	const nextModels = {
+		...(current.agentModels ?? {}),
+		[role]: {
+			modelId: selection.modelId,
+			modelTitle: selection.modelTitle,
+			modelProvider: selection.modelProvider,
+			thinking: selection.thinking
+				? {
+						enabled: selection.thinking.enabled,
+						effort: selection.thinking.effort,
+					}
+				: undefined,
+		},
+	};
+	setProviderConfig(provider, { agentModels: nextModels });
+}
+
 /**
  * Reads settings from localStorage, migrating legacy OpenRouter settings if present.
  */
@@ -128,6 +226,9 @@ export function getProviderSettings(): AIProviderSettings {
 							enabled: false,
 							effort: "high",
 						},
+						agentModels: parseAgentModels(
+							parsed?.providers?.openrouter?.agentModels,
+						),
 					},
 					generalcompute: {
 						apiKey:
@@ -166,6 +267,9 @@ export function getProviderSettings(): AIProviderSettings {
 							enabled: false,
 							effort: "high",
 						},
+						agentModels: parseAgentModels(
+							parsed?.providers?.generalcompute?.agentModels,
+						),
 					},
 				},
 			};

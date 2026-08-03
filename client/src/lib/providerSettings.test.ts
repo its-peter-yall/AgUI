@@ -27,12 +27,18 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   WEB_SEARCH_STORAGE_KEY,
+  areAgentModelsConfigured,
+  getAgentModelSelection,
   getConfiguredWebSearchProviders,
+  getProviderSettings,
   getWebSearchSettings,
   hasWebSearchCapability,
+  setAgentModelSelection,
+  setProviderConfig,
   setWebSearchMasterEnabled,
   setWebSearchProviderConfig,
 } from '@/lib/providerSettings';
+import type { AgentRole } from '@/types/provider';
 
 describe('web search provider settings', () => {
   beforeEach(() => {
@@ -105,5 +111,100 @@ describe('web search provider settings', () => {
     expect(localStorage.getItem(WEB_SEARCH_STORAGE_KEY)).toContain(
       'brave-browser-key',
     );
+  });
+});
+
+describe('agent model settings', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('treats missing agentModels as unconfigured', () => {
+    setProviderConfig('openrouter', {
+      apiKey: 'k',
+      model: 'm',
+      modelTitle: 'M',
+    });
+    const cfg = getProviderSettings().providers.openrouter;
+    expect(areAgentModelsConfigured(cfg)).toBe(false);
+  });
+
+  it('areAgentModelsConfigured true only when all four have modelId', () => {
+    const roles: AgentRole[] = [
+      'researcher',
+      'planner',
+      'generator',
+      'quizzer',
+    ];
+    for (const role of roles) {
+      setAgentModelSelection('openrouter', role, {
+        modelId: `${role}-model`,
+        modelTitle: role,
+        modelProvider: 'openrouter',
+      });
+    }
+    const cfg = getProviderSettings().providers.openrouter;
+    expect(areAgentModelsConfigured(cfg)).toBe(true);
+  });
+
+  it('false when one role missing or blank modelId', () => {
+    setAgentModelSelection('openrouter', 'researcher', {
+      modelId: 'r',
+    });
+    setAgentModelSelection('openrouter', 'planner', { modelId: 'p' });
+    setAgentModelSelection('openrouter', 'generator', { modelId: 'g' });
+    // quizzer missing
+    expect(
+      areAgentModelsConfigured(
+        getProviderSettings().providers.openrouter,
+      ),
+    ).toBe(false);
+
+    setAgentModelSelection('openrouter', 'quizzer', { modelId: '   ' });
+    expect(
+      areAgentModelsConfigured(
+        getProviderSettings().providers.openrouter,
+      ),
+    ).toBe(false);
+  });
+
+  it('round-trips agentModels through localStorage', () => {
+    setAgentModelSelection('openrouter', 'planner', {
+      modelId: 'openai/gpt-4o',
+      modelTitle: 'GPT-4o',
+      modelProvider: 'generalcompute',
+      thinking: { enabled: true, effort: 'medium' },
+    });
+    const again = getProviderSettings().providers.openrouter;
+    expect(getAgentModelSelection(again, 'planner')).toEqual({
+      modelId: 'openai/gpt-4o',
+      modelTitle: 'GPT-4o',
+      modelProvider: 'generalcompute',
+      thinking: { enabled: true, effort: 'medium' },
+    });
+  });
+
+  it('ignores invalid agentModels shape on load', () => {
+    localStorage.setItem(
+      'ai_provider_settings',
+      JSON.stringify({
+        activeProvider: 'openrouter',
+        providers: {
+          openrouter: {
+            apiKey: '',
+            model: '',
+            modelTitle: '',
+            agentModels: { planner: 'bad' },
+          },
+          generalcompute: {
+            apiKey: '',
+            model: '',
+            modelTitle: '',
+          },
+        },
+      }),
+    );
+    const cfg = getProviderSettings().providers.openrouter;
+    expect(cfg.agentModels?.planner).toBeUndefined();
   });
 });
