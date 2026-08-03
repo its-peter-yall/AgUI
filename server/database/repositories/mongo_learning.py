@@ -250,6 +250,78 @@ class MongoLearningRepository:
         if result.matched_count == 0:
             raise LookupError(f"Learning session not found: {session_id}")
 
+    def delete_learning_session(self, session_id: str) -> bool:
+        node_ids = [
+            item["_id"]
+            for item in self._nodes.find(
+                {"learning_session_id": session_id},
+                {"_id": 1},
+            )
+        ]
+        revision_ids = [
+            item["_id"]
+            for item in self._revisions.find(
+                {"original_session_id": session_id},
+                {"_id": 1},
+            )
+        ]
+        reports = self._db["research_reports"]
+        report_ids = [
+            item["_id"]
+            for item in reports.find({"session_id": session_id}, {"_id": 1})
+        ]
+        sections = self._db["research_sections"]
+        section_ids = (
+            [
+                item["_id"]
+                for item in sections.find(
+                    {"report_id": {"$in": report_ids}},
+                    {"_id": 1},
+                )
+            ]
+            if report_ids
+            else []
+        )
+
+        if section_ids:
+            self._db["research_section_sources"].delete_many(
+                {"section_id": {"$in": section_ids}}
+            )
+        if report_ids:
+            self._db["research_provider_statuses"].delete_many(
+                {"report_id": {"$in": report_ids}}
+            )
+            sections.delete_many({"report_id": {"$in": report_ids}})
+        self._db["research_sources"].delete_many({"session_id": session_id})
+        reports.delete_many({"session_id": session_id})
+
+        if revision_ids:
+            self._attempts.delete_many(
+                {"revision_session_id": {"$in": revision_ids}}
+            )
+            self._revision_nodes.delete_many(
+                {"revision_session_id": {"$in": revision_ids}}
+            )
+            self._revisions.delete_many({"_id": {"$in": revision_ids}})
+        if node_ids:
+            self._attempts.delete_many({"node_id": {"$in": node_ids}})
+            self._quizzes.delete_many({"node_id": {"$in": node_ids}})
+            self._db["node_sources"].delete_many(
+                {"node_id": {"$in": node_ids}}
+            )
+            self._db["generation_briefs"].delete_many(
+                {"node_id": {"$in": node_ids}}
+            )
+            self._nodes.delete_many({"_id": {"$in": node_ids}})
+
+        self._db["generation_briefs"].delete_many(
+            {"session_id": session_id}
+        )
+        self._db["generation_jobs"].delete_many({"session_id": session_id})
+        self._db["progress_events"].delete_many({"session_id": session_id})
+        result = self._sessions.delete_one({"_id": session_id})
+        return result.deleted_count > 0
+
     def create_concept_node(
         self,
         session_id: str,

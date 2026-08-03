@@ -210,6 +210,35 @@ class MongoLearningTests(unittest.TestCase):
         self.assertEqual(len(inserts), 2)
         self.assertEqual(revision["revision_number"], 1)
 
+    def test_delete_session_removes_all_dependent_documents(self) -> None:
+        self.database["concept_nodes"].find.return_value = [
+            {"_id": "n1"},
+            {"_id": "n2"},
+        ]
+        self.database["revision_sessions"].find.return_value = [
+            {"_id": "r1"}
+        ]
+        self.database["research_reports"].find.return_value = [
+            {"_id": "report-1"}
+        ]
+        self.database["research_sections"].find.return_value = [
+            {"_id": "section-1"}
+        ]
+        self.database["learning_sessions"].delete_one.return_value.deleted_count = 1
+
+        deleted = self.repository.delete_learning_session("s1")
+
+        self.assertTrue(deleted)
+        self.database["quiz_data"].delete_many.assert_called_once_with(
+            {"node_id": {"$in": ["n1", "n2"]}}
+        )
+        self.database["research_section_sources"].delete_many.assert_called_once_with(
+            {"section_id": {"$in": ["section-1"]}}
+        )
+        self.database["progress_events"].delete_many.assert_called_once_with(
+            {"session_id": "s1"}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
