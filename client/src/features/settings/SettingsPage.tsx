@@ -16,7 +16,7 @@
  * KEY COMPONENTS:
  *    - SettingsPage: Main visual preferences container
  *    - Visual Theme Selection Cards: Custom Light, Dark, and System selectors
- *    - OpenRouterSettingsPanel: Integrates always-expanded API configuration
+ *    - OpenRouterSettingsPanel: Integrates collapsible API configuration
  *
  * DEPENDENCIES:
  *    - External: react, react-router-dom, lucide-react, framer-motion
@@ -29,6 +29,7 @@
  */
 
 import { useState, useCallback } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -36,6 +37,7 @@ import {
 	Moon,
 	Monitor,
 	Check,
+	ChevronDown,
 	ArrowLeft,
 	MessageCircle,
 } from "lucide-react";
@@ -48,9 +50,73 @@ import { getProviderSettings, setProviderConfig } from "@/lib/providerSettings";
 import type { AIProvider } from "@/types/provider";
 import { cn } from "@/lib/utils";
 
+type SettingsSectionKey =
+	| "appearance"
+	| "ai-provider"
+	| "web-search"
+	| "chat-model";
+
+type SettingsSectionProps = {
+	headingId: string;
+	contentId: string;
+	title: ReactNode;
+	isExpanded: boolean;
+	onToggle: () => void;
+	children: ReactNode;
+};
+
+function SettingsSection({
+	headingId,
+	contentId,
+	title,
+	isExpanded,
+	onToggle,
+	children,
+}: SettingsSectionProps) {
+	return (
+		<section className="space-y-4" aria-labelledby={headingId}>
+			<h2
+				id={headingId}
+				className="text-lg font-semibold tracking-tight border-b pb-2"
+			>
+				<button
+					type="button"
+					aria-expanded={isExpanded}
+					aria-controls={contentId}
+					onClick={onToggle}
+					className={cn(
+						"flex w-full items-center justify-between text-left",
+						"focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffb74d]",
+					)}
+				>
+					{title}
+					<ChevronDown
+						aria-hidden="true"
+						className={cn(
+							"h-5 w-5 shrink-0 text-muted-foreground transition-transform",
+							isExpanded && "rotate-180",
+						)}
+					/>
+				</button>
+			</h2>
+			<div id={contentId} hidden={!isExpanded}>
+				{isExpanded && children}
+			</div>
+		</section>
+	);
+}
+
 export function SettingsPage() {
 	const { theme, setTheme } = useTheme();
 	const [settings, setSettings] = useState(() => getProviderSettings());
+	const [expandedSections, setExpandedSections] = useState<
+		Record<SettingsSectionKey, boolean>
+	>({
+		appearance: false,
+		"ai-provider": false,
+		"web-search": false,
+		"chat-model": false,
+	});
 	const location = useLocation();
 
 	const fromPath = (location.state as { from?: string })?.from || "/learn";
@@ -68,6 +134,13 @@ export function SettingsPage() {
 	);
 
 	const activeConfig = settings.providers[settings.activeProvider];
+
+	const toggleSection = useCallback((section: SettingsSectionKey) => {
+		setExpandedSections((current) => ({
+			...current,
+			[section]: !current[section],
+		}));
+	}, []);
 
 	const themes = [
 		{
@@ -141,13 +214,13 @@ export function SettingsPage() {
 				</div>
 
 				{/* Section 1: Appearance & Theme */}
-				<section className="space-y-4" aria-labelledby="appearance-heading">
-					<h2
-						id="appearance-heading"
-						className="text-lg font-semibold tracking-tight border-b pb-2"
-					>
-						Appearance
-					</h2>
+				<SettingsSection
+					headingId="appearance-heading"
+					contentId="appearance-content"
+					title="Appearance"
+					isExpanded={expandedSections.appearance}
+					onToggle={() => toggleSection("appearance")}
+				>
 					<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
 						{themes.map((t) => {
 							const isSelected = theme === t.id;
@@ -193,51 +266,55 @@ export function SettingsPage() {
 							);
 						})}
 					</div>
-				</section>
+				</SettingsSection>
 
 				{/* Section 2: AI Provider configurations */}
-				<section className="space-y-4" aria-labelledby="ai-provider-heading">
-					<h2
-						id="ai-provider-heading"
-						className="text-lg font-semibold tracking-tight border-b pb-2"
-					>
-						AI Provider Credentials
-					</h2>
+				<SettingsSection
+					headingId="ai-provider-heading"
+					contentId="ai-provider-content"
+					title="AI Provider Credentials"
+					isExpanded={expandedSections["ai-provider"]}
+					onToggle={() => toggleSection("ai-provider")}
+				>
 					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
 						<p className="text-xs text-muted-foreground mb-4">
 							Keys are stored in this browser. A2UI sends an AI key only for
 							model work and sends search keys only when a web-enabled course
 							start or resume requires them.
 						</p>
-						{/* Always expanded multi-provider config panel */}
 						<OpenRouterSettingsPanel />
 					</div>
-				</section>
+				</SettingsSection>
 
 				{/* Section 3: Web Search */}
-				<section className="space-y-4" aria-labelledby="web-search-heading">
-					<h2
-						id="web-search-heading"
-						className="text-lg font-semibold tracking-tight border-b pb-2"
-					>
-						Web Search
-					</h2>
+				<SettingsSection
+					headingId="web-search-heading"
+					contentId="web-search-content"
+					title="Web Search"
+					isExpanded={expandedSections["web-search"]}
+					onToggle={() => toggleSection("web-search")}
+				>
 					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
 						<WebSearchSettingsPanel />
 					</div>
-				</section>
+				</SettingsSection>
 
 				{/* Section 4: Chat Assistant Model */}
-				<section className="space-y-4" aria-labelledby="chat-model-heading">
-					<h2
-						id="chat-model-heading"
-						className="text-lg font-semibold tracking-tight border-b pb-2"
-					>
+				<SettingsSection
+					headingId="chat-model-heading"
+					contentId="chat-model-content"
+					title={
 						<span className="flex items-center gap-2">
-							<MessageCircle className="h-5 w-5 text-[#ffb74d]" />
+							<MessageCircle
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
 							Chat Assistant Model
 						</span>
-					</h2>
+					}
+					isExpanded={expandedSections["chat-model"]}
+					onToggle={() => toggleSection("chat-model")}
+				>
 					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
 						<p className="text-xs text-muted-foreground mb-4">
 							Select a separate model for the concept chat assistant. If not
@@ -261,7 +338,7 @@ export function SettingsPage() {
 							</p>
 						)}
 					</div>
-				</section>
+				</SettingsSection>
 			</main>
 
 			{/* Footer */}
