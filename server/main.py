@@ -30,13 +30,16 @@ USAGE:
 from contextlib import asynccontextmanager
 import logging
 import os
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from server.config import settings
 from server.database.checkpointer import CheckpointerController
-from server.database.storage_mode import DeploymentMode
+from server.database.storage_mode import DeploymentMode, StorageContext
 from server.database.storage_registry import (
     initialize_sqlite_storage,
     storage_context,
@@ -50,6 +53,46 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _require_cloud_mongo_config() -> tuple[str, str]:
+    """Return validated cloud Mongo URI and database name."""
+    uri = settings.mongo_uri
+    db_name = settings.mongo_db
+    if not uri or not db_name:
+        raise RuntimeError(
+            "DEPLOYMENT_MODE=cloud requires MONGO_URI and MONGO_DB"
+        )
+    return uri, db_name
+
+
+async def start_cloud_runtime(
+    *,
+    app_state: Any,
+    storage: StorageContext,
+    uri: str,
+    db_name: str,
+    runtime_type: type[GenerationRuntime] = GenerationRuntime,
+) -> GenerationRuntime:
+    """Connect cloud Mongo, wire checkpointer, and create runtime."""
+    controller = CheckpointerController(
+        app_state=app_state,
+        sqlite_saver=None,
+        graph_builder=lambda saver: build_graph(checkpointer=saver),
+    )
+    storage.set_checkpointer_controller(controller)
+    try:
+        await run_in_threadpool(storage.connect, uri, db_name)
+    except Exception as exc:
+        logger.error(
+            "Cloud MongoDB startup failed error=%s",
+            type(exc).__name__,
+        )
+        raise RuntimeError("Cloud MongoDB startup failed") from exc
+    app_state.storage = storage
+    runtime = runtime_type(app_state=app_state)
+    app_state.generation_runtime = runtime
+    return runtime
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -57,6 +100,23 @@ async def lifespan(app: FastAPI):
     Initializes database on startup.
     """
     logger.info("Starting A2UI Backend...")
+
+    if settings.deployment_mode == DeploymentMode.CLOUD:
+        uri, db_name = _require_cloud_mongo_config()
+        runtime = await start_cloud_runtime(
+            app_state=app.state,
+            storage=storage_context,
+            uri=uri,
+            db_name=db_name,
+        )
+        try:
+            yield
+        finally:
+            await runtime.shutdown()
+            storage_context.close()
+            storage_context.set_checkpointer_controller(None)
+            logger.info("Shutting down A2UI Backend...")
+        return
 
     # Initialize database
     try:

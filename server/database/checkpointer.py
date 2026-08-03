@@ -24,7 +24,7 @@ USAGE:
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from langgraph.checkpoint.mongodb import MongoDBSaver
 
@@ -36,7 +36,7 @@ class CheckpointerController:
         self,
         *,
         app_state: Any,
-        sqlite_saver: Any,
+        sqlite_saver: Optional[Any],
         graph_builder: Callable[[Any], Any],
     ) -> None:
         self._app_state = app_state
@@ -59,4 +59,8 @@ class CheckpointerController:
         self.active_saver = saver
 
     def activate_sqlite(self) -> None:
+        if self.sqlite_saver is None:
+            raise RuntimeError(
+                "SQLite checkpointer is unavailable in cloud mode"
+            )
         self.activate(self.sqlite_saver)

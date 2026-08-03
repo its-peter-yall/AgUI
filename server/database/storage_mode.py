@@ -203,6 +203,15 @@ class StorageContext:
         if previous is not None:
             previous.client.close()
 
+    def close(self) -> None:
+        """Close active client without selecting another backend."""
+
+        with self._lock:
+            connection = self._mongo
+            self._mongo = None
+        if connection is not None:
+            connection.client.close()
+
     def local_data_present(self) -> bool:
         if not self.sqlite_path.exists():
             return False
