@@ -62,6 +62,11 @@ class Settings:
         self.GENERALCOMPUTE_TIMEOUT_SECONDS = float(
             os.getenv("GENERALCOMPUTE_TIMEOUT_SECONDS", "60.0")
         )
+        if self.deployment_mode == DeploymentMode.CLOUD:
+            if not self.mongo_uri or not self.mongo_db:
+                raise RuntimeError(
+                    "DEPLOYMENT_MODE=cloud requires MONGO_URI and MONGO_DB"
+                )
 
 
 settings = Settings()
