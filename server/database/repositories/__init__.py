@@ -19,6 +19,30 @@ from server.database.repositories.errors import (
     RepositoryConflictError,
     RepositoryUnavailableError,
 )
+from server.database.repositories.mongo_artifacts import (
+    MongoGenerationArtifactRepository,
+)
+from server.database.repositories.mongo_factory import build_mongo_bundle
+from server.database.repositories.mongo_indexes import (
+    ensure_all_indexes,
+    ensure_learning_indexes,
+    ensure_operational_indexes,
+)
+from server.database.repositories.mongo_jobs import (
+    MongoGenerationJobRepository,
+)
+from server.database.repositories.mongo_learning import (
+    MongoLearningRepository,
+)
+from server.database.repositories.mongo_progress import (
+    MongoProgressEventRepository,
+)
+from server.database.repositories.mongo_research import (
+    MongoResearchRepository,
+)
+from server.database.repositories.mongo_settings import (
+    MongoAppSettingsRepository,
+)
 from server.database.repositories.protocols import (
     AppSettingsRepository,
     GenerationArtifactRepository,
@@ -43,6 +67,12 @@ __all__ = [
     "GenerationJobRepository",
     "LearningRepository",
     "LocalAppSettingsRepository",
+    "MongoAppSettingsRepository",
+    "MongoGenerationArtifactRepository",
+    "MongoGenerationJobRepository",
+    "MongoLearningRepository",
+    "MongoProgressEventRepository",
+    "MongoResearchRepository",
     "ProgressEventRepository",
     "RepositoryBundle",
     "RepositoryConflictError",
@@ -53,5 +83,9 @@ __all__ = [
     "SqliteLearningRepository",
     "SqliteProgressEventRepository",
     "SqliteResearchRepository",
+    "build_mongo_bundle",
     "build_sqlite_bundle",
+    "ensure_all_indexes",
+    "ensure_learning_indexes",
+    "ensure_operational_indexes",
 ]

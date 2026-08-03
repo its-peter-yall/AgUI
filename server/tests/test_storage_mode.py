@@ -27,11 +27,45 @@ from unittest.mock import MagicMock, patch
 
 from server.config import Settings
 from server.database.mongo_client import MongoConnection
+from server.database.repositories.bundle import RepositoryBundle
 from server.database.storage_mode import (
     DeploymentMode,
     StorageBackend,
     StorageContext,
 )
+
+
+def make_bundle(label: str) -> RepositoryBundle:
+    return RepositoryBundle(
+        learning=MagicMock(name=f"{label}-learning"),
+        jobs=MagicMock(name=f"{label}-jobs"),
+        artifacts=MagicMock(name=f"{label}-artifacts"),
+        research=MagicMock(name=f"{label}-research"),
+        progress=MagicMock(name=f"{label}-progress"),
+        app_settings=MagicMock(name=f"{label}-app_settings"),
+    )
+
+
+def make_context(
+    *,
+    sqlite_path,
+    mongo_factory,
+    mongo_bundle_factory=None,
+    mongo_indexer=None,
+    sqlite_repositories=None,
+) -> StorageContext:
+    kwargs = {
+        "deployment_mode": DeploymentMode.LOCAL,
+        "sqlite_path": sqlite_path,
+        "mongo_factory": mongo_factory,
+    }
+    if sqlite_repositories is not None:
+        kwargs["sqlite_repositories"] = sqlite_repositories
+    if mongo_bundle_factory is not None:
+        kwargs["mongo_bundle_factory"] = mongo_bundle_factory
+    if mongo_indexer is not None:
+        kwargs["mongo_indexer"] = mongo_indexer
+    return StorageContext(**kwargs)
 
 
 class StorageModeConfigTests(unittest.TestCase):
@@ -83,16 +117,19 @@ class StorageContextTests(unittest.TestCase):
             database=MagicMock(),
             db_name="atlas_db",
         )
+        self.sqlite_bundle = make_bundle("sqlite")
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
     def test_connect_sets_validated_client_in_process_memory(self) -> None:
         factory = MagicMock(return_value=self.connection)
-        context = StorageContext(
-            deployment_mode=DeploymentMode.LOCAL,
+        context = make_context(
             sqlite_path=self.db_path,
             mongo_factory=factory,
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
         )
         context.connect("mongodb://host", "atlas_db")
 
@@ -105,10 +142,12 @@ class StorageContextTests(unittest.TestCase):
         factory = MagicMock(
             side_effect=[self.connection, RuntimeError("failed")]
         )
-        context = StorageContext(
-            deployment_mode=DeploymentMode.LOCAL,
+        context = make_context(
             sqlite_path=self.db_path,
             mongo_factory=factory,
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
         )
         context.connect("mongodb://one", "atlas_db")
         with self.assertRaises(RuntimeError):
@@ -118,10 +157,12 @@ class StorageContextTests(unittest.TestCase):
         self.client.close.assert_not_called()
 
     def test_disconnect_closes_client_and_reverts_to_sqlite(self) -> None:
-        context = StorageContext(
-            deployment_mode=DeploymentMode.LOCAL,
+        context = make_context(
             sqlite_path=self.db_path,
             mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
         )
         context.connect("mongodb://host", "atlas_db")
         context.disconnect()
@@ -129,6 +170,41 @@ class StorageContextTests(unittest.TestCase):
         self.client.close.assert_called_once_with()
         self.assertEqual(context.active_backend, StorageBackend.SQLITE)
         self.assertFalse(context.connected)
+        self.assertIs(context.learning, self.sqlite_bundle.learning)
+
+    def test_connect_publishes_complete_mongo_bundle_atomically(self) -> None:
+        mongo_bundle = make_bundle("mongo")
+        bundle_factory = MagicMock(return_value=mongo_bundle)
+        indexer = MagicMock()
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=bundle_factory,
+            mongo_indexer=indexer,
+            sqlite_repositories=self.sqlite_bundle,
+        )
+
+        context.connect("mongodb://host", "atlas")
+
+        indexer.assert_called_once_with(self.connection.database)
+        bundle_factory.assert_called_once_with(self.connection.database)
+        self.assertIs(context.learning, mongo_bundle.learning)
+        self.assertIs(context.jobs, mongo_bundle.jobs)
+        self.assertEqual(context.active_backend, StorageBackend.MONGO)
+
+    def test_bundle_build_failure_keeps_sqlite_and_closes_candidate(self) -> None:
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(side_effect=RuntimeError("bad")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+        )
+        with self.assertRaises(RuntimeError):
+            context.connect("mongodb://host", "atlas")
+        self.connection.client.close.assert_called_once_with()
+        self.assertEqual(context.active_backend, StorageBackend.SQLITE)
+        self.assertIs(context.learning, context.sqlite_repositories.learning)
 
 
 if __name__ == "__main__":

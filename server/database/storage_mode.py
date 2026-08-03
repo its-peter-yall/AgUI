@@ -23,10 +23,12 @@ import sqlite3
 import threading
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from server.database.mongo_client import MongoConnection, connect_mongo
 from server.database.repositories.bundle import RepositoryBundle
+from server.database.repositories.mongo_factory import build_mongo_bundle
+from server.database.repositories.mongo_indexes import ensure_all_indexes
 from server.database.repositories.protocols import (
     AppSettingsRepository,
     GenerationArtifactRepository,
@@ -37,6 +39,8 @@ from server.database.repositories.protocols import (
 )
 
 MongoFactory = Callable[[str, str], MongoConnection]
+MongoBundleFactory = Callable[[Any], RepositoryBundle]
+MongoIndexer = Callable[[Any], None]
 
 
 class DeploymentMode(str, Enum):
@@ -83,11 +87,15 @@ class StorageContext:
         sqlite_path: Path,
         mongo_factory: MongoFactory = connect_mongo,
         sqlite_repositories: Optional[RepositoryBundle] = None,
+        mongo_bundle_factory: MongoBundleFactory = build_mongo_bundle,
+        mongo_indexer: MongoIndexer = ensure_all_indexes,
     ) -> None:
         self.deployment_mode = deployment_mode
         self.sqlite_path = sqlite_path
         self.active_backend = StorageBackend.SQLITE
         self._mongo_factory = mongo_factory
+        self._mongo_bundle_factory = mongo_bundle_factory
+        self._mongo_indexer = mongo_indexer
         self._mongo: Optional[MongoConnection] = None
         self._lock = threading.RLock()
         bundle = (
@@ -109,6 +117,10 @@ class StorageContext:
     @property
     def mongo_connection(self) -> Optional[MongoConnection]:
         return self._mongo
+
+    @property
+    def sqlite_repositories(self) -> RepositoryBundle:
+        return self._sqlite_repositories
 
     @property
     def learning(self) -> LearningRepository:
@@ -136,9 +148,16 @@ class StorageContext:
 
     def connect(self, uri: str, db_name: str) -> None:
         candidate = self._mongo_factory(uri, db_name)
+        try:
+            self._mongo_indexer(candidate.database)
+            repositories = self._mongo_bundle_factory(candidate.database)
+        except Exception:
+            candidate.client.close()
+            raise
         with self._lock:
             previous = self._mongo
             self._mongo = candidate
+            self._repositories = repositories
             self.active_backend = StorageBackend.MONGO
         if previous is not None:
             previous.client.close()
