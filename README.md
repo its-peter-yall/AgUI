@@ -164,6 +164,12 @@ Create `client/.env`:
 VITE_API_URL=http://localhost:8000
 ```
 
+### Optional MongoDB Atlas Storage
+
+Optional cloud persistence is documented in
+[`docs/mongodb-atlas-storage/operations.md`](docs/mongodb-atlas-storage/operations.md).
+Local SQLite remains default.
+
 ## Running the Application
 
 ### First Time?
