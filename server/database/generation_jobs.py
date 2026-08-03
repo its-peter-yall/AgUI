@@ -908,6 +908,61 @@ class GenerationJobStore:
                 ),
             )
 
+    def append_warning(
+        self,
+        session_id: str,
+        warning: GenerationWarning,
+    ) -> None:
+        """Append warning once using canonical payload equality."""
+        with optional_transaction(self.db_path, None) as conn:
+            job = self.get_by_session(session_id, conn=conn)
+            if job is None:
+                raise GenerationJobNotFound(session_id)
+            if warning in job.warnings:
+                return
+            warnings = [*job.warnings, warning]
+            conn.execute(
+                "UPDATE generation_jobs SET warnings_json = ?, "
+                "updated_at = ? WHERE session_id = ?",
+                (
+                    canonical_json(
+                        [item.model_dump(mode="json") for item in warnings]
+                    ),
+                    _utc_now(None).isoformat(),
+                    session_id,
+                ),
+            )
+
+    def bump_counts(
+        self,
+        session_id: str,
+        **increments: int,
+    ) -> GenerationCounts:
+        """Increment selected generation counters in one transaction."""
+        allowed = set(GenerationCounts.model_fields)
+        if set(increments) - allowed or any(
+            value < 0 for value in increments.values()
+        ):
+            raise ValueError("Invalid generation count increment")
+        with optional_transaction(self.db_path, None) as conn:
+            job = self.get_by_session(session_id, conn=conn)
+            if job is None:
+                raise GenerationJobNotFound(session_id)
+            values = job.counts.model_dump()
+            for name, value in increments.items():
+                values[name] += value
+            counts = GenerationCounts.model_validate(values)
+            conn.execute(
+                "UPDATE generation_jobs SET counts_json = ?, updated_at = ? "
+                "WHERE session_id = ?",
+                (
+                    counts.model_dump_json(),
+                    _utc_now(None).isoformat(),
+                    session_id,
+                ),
+            )
+        return counts
+
     def mark_failed(
         self,
         session_id: str,

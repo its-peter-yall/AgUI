@@ -31,7 +31,11 @@ from server.database.generation_jobs import (
 )
 from server.database.generation_migrations import initialize_generation_schema
 from server.database.learning_persistence import LearningManager
-from server.schemas.generation import GenerationStage, GroundingStatus
+from server.schemas.generation import (
+    GenerationStage,
+    GenerationWarning,
+    GroundingStatus,
+)
 
 
 class GenerationJobStoreTests(unittest.TestCase):
@@ -154,6 +158,36 @@ class GenerationJobStoreTests(unittest.TestCase):
         resumed = self.store.prepare_resume(session["id"], now=self.now)
         self.assertEqual(resumed.stage, GenerationStage.RESEARCHING)
         self.assertFalse(resumed.cancel_requested)
+
+    def test_append_warning_is_idempotent_by_warning_payload(self) -> None:
+        _, job = self.store.create_session_shell_and_job(
+            query="q",
+            user_id=None,
+            mode="auto",
+            web_search_requested=False,
+        )
+        warning = GenerationWarning(code="slow", message="Provider slow")
+        self.store.append_warning(job.session_id, warning)
+        self.store.append_warning(job.session_id, warning)
+
+        updated = self.store.get_by_session(job.session_id)
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated.warnings, [warning])
+
+    def test_bump_counts_updates_requested_nonnegative_fields(self) -> None:
+        _, job = self.store.create_session_shell_and_job(
+            query="q",
+            user_id=None,
+            mode="auto",
+            web_search_requested=False,
+        )
+        counts = self.store.bump_counts(
+            job.session_id,
+            sources=2,
+            research_sections=1,
+        )
+        self.assertEqual(counts.sources, 2)
+        self.assertEqual(counts.research_sections, 1)
 
 
 if __name__ == "__main__":
