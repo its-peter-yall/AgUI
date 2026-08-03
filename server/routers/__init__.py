@@ -25,6 +25,7 @@ USAGE:
 
 from server.routers.learning import router as learning_router
 from server.routers.llm import router as llm_router
+from server.routers.storage import router as storage_router
 
-__all__ = ["learning_router", "llm_router"]
+__all__ = ["learning_router", "llm_router", "storage_router"]
 
