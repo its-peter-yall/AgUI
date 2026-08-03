@@ -51,6 +51,13 @@ import { WEB_SEARCH_PROVIDER_IDS } from "@/lib/webSearchProviders";
 const STORAGE_KEY = "ai_provider_settings";
 const LEGACY_STORAGE_KEY = "openrouter_settings";
 
+export const APP_SETTINGS_CHANGED_EVENT = "a2ui-app-settings-changed";
+export const APP_SETTINGS_HYDRATED_EVENT = "a2ui-app-settings-hydrated";
+
+function emitSettingsChanged(): void {
+	window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+}
+
 export interface ProviderConfig {
 	apiKey: string;
 	model: string;
@@ -407,6 +414,7 @@ export function setProviderSettings(
 		},
 	};
 	localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+	emitSettingsChanged();
 }
 
 /**
@@ -544,6 +552,7 @@ export function getWebSearchSettings(): WebSearchSettings {
  */
 export function setWebSearchSettings(settings: WebSearchSettings): void {
 	localStorage.setItem(WEB_SEARCH_STORAGE_KEY, JSON.stringify(settings));
+	emitSettingsChanged();
 }
 
 /**

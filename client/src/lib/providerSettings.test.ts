@@ -22,14 +22,17 @@
  * ============================================================================
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRole } from '@/types/provider';
 import {
+  APP_SETTINGS_CHANGED_EVENT,
   areAgentModelsConfigured,
   getAgentModelSelection,
   getProviderSettings,
   setAgentModelSelection,
   setProviderConfig,
+  setProviderSettings,
+  setWebSearchSettings,
 } from './providerSettings';
 
 describe('provider settings basics', () => {
@@ -197,5 +200,35 @@ describe('agent model settings', () => {
     const cfg = getProviderSettings().providers.openrouter;
     expect(cfg.chatThinking).toEqual({ enabled: true, effort: 'medium' });
     expect(cfg.chatModel).toBe('or/think');
+  });
+});
+
+describe('app settings change events', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('emits one settings change event after provider save', () => {
+    const listener = vi.fn();
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, listener);
+    setProviderSettings({ activeProvider: 'generalcompute' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, listener);
+  });
+
+  it('emits one settings change event after web search save', () => {
+    const listener = vi.fn();
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, listener);
+    setWebSearchSettings({
+      masterEnabled: true,
+      providers: {
+        tavily: { apiKey: 't', enabled: true },
+        exa: { apiKey: '', enabled: false },
+        brave: { apiKey: '', enabled: false },
+        serpapi: { apiKey: '', enabled: false },
+      },
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, listener);
   });
 });
