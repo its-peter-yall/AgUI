@@ -108,24 +108,34 @@ export function WebSearchSettingsPanel() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-foreground">
-            Optional web search
+            Enable web search
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">
             Ground courses in current internet sources when you opt in per
             course.
           </p>
         </div>
-        <input
-          type="checkbox"
+        <button
+          type="button"
+          onClick={handleMasterToggle}
           role="switch"
-          checked={settings.masterEnabled}
+          aria-checked={settings.masterEnabled}
           aria-label="Enable web search"
-          onChange={handleMasterToggle}
           className={cn(
-            'h-5 w-9 cursor-pointer accent-[#ffb74d]',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffb74d] rounded',
+            'relative inline-flex h-6 w-11 items-center rounded-full transition-colors',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffb74d] focus-visible:ring-offset-2',
+            settings.masterEnabled
+              ? 'bg-[#ffb74d]'
+              : 'bg-muted border border-border',
           )}
-        />
+        >
+          <span
+            className={cn(
+              'inline-block h-4 w-4 transform rounded-full bg-white shadow-lg transition-transform',
+              settings.masterEnabled ? 'translate-x-6' : 'translate-x-1',
+            )}
+          />
+        </button>
       </div>
 
       {settings.masterEnabled && (

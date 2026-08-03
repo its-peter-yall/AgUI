@@ -36,7 +36,7 @@ describe('WebSearchSettingsPanel', () => {
     render(<WebSearchSettingsPanel />);
     expect(
       screen.getByRole('switch', { name: /enable web search/i }),
-    ).not.toBeChecked();
+    ).toHaveAttribute('aria-checked', 'false');
     expect(screen.queryByText('Tavily')).not.toBeInTheDocument();
     expect(screen.queryByText('Brave Search')).not.toBeInTheDocument();
   });
