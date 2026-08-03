@@ -25,6 +25,7 @@
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 
 import { SettingsPage } from './SettingsPage';
@@ -45,11 +46,20 @@ vi.mock('./ModelPicker', () => ({
   ModelPicker: () => <div>Model picker content</div>,
 }));
 
+vi.mock('./ThinkingModeToggle', () => ({
+  ThinkingModeToggle: () => <div>chat-thinking-toggle</div>,
+}));
+
 function renderSettingsPage() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <MemoryRouter>
-      <SettingsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 

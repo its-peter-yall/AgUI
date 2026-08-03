@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncGenerator, List, cast
+from typing import Any, AsyncGenerator, List, Optional, cast
 
 from openai import AsyncOpenAI
 
@@ -197,6 +197,8 @@ async def stream_concept_chat(
     selected_heading_ids: List[str],
     node_title: str,
     provider: str = "openrouter",
+    thinking_enabled: bool = False,
+    thinking_effort: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream chat completions as SSE frames.
 
@@ -212,6 +214,8 @@ async def stream_concept_chat(
         selected_heading_ids: User-selected heading identifiers.
         node_title: Title of the concept node.
         provider: AI provider identifier ('openrouter' or 'generalcompute').
+        thinking_enabled: OpenRouter reasoning mode on/off.
+        thinking_effort: Effort level when thinking is enabled.
 
     Yields:
         SSE frame strings: 'data: {"delta":"...", ...}\\n\\n' per chunk,
@@ -220,10 +224,12 @@ async def stream_concept_chat(
     base_url = resolve_chat_base_url(model_slug, provider)
 
     logger.info(
-        "Concept chat request: provider=%s, base_url=%s, model=%s",
+        "Concept chat request: provider=%s, base_url=%s, model=%s, "
+        "thinking=%s",
         provider,
         base_url,
         model_slug,
+        thinking_enabled,
     )
 
     client = _get_client(base_url, api_key)
@@ -247,12 +253,19 @@ async def stream_concept_chat(
         min(len(history), MAX_CHAT_HISTORY_MESSAGES),
     )
 
+    create_kwargs: dict[str, Any] = {
+        "model": model_slug,
+        "messages": cast(Any, messages),
+        "stream": True,
+    }
+    if provider == "openrouter" and thinking_enabled:
+        effort = thinking_effort or "high"
+        create_kwargs["extra_body"] = {
+            "reasoning": {"effort": effort},
+        }
+
     try:
-        stream = await client.chat.completions.create(
-            model=model_slug,
-            messages=cast(Any, messages),
-            stream=True,
-        )
+        stream = await client.chat.completions.create(**create_kwargs)
 
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta:

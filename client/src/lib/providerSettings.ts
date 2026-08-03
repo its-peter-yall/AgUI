@@ -58,6 +58,8 @@ export interface ProviderConfig {
 	chatModel?: string;
 	chatModelTitle?: string;
 	chatModelProvider?: AIProvider;
+	/** Thinking config for concept chat assistant (OpenRouter only) */
+	chatThinking?: ThinkingConfig;
 	maxCompletionTokens?: number;
 	thinking?: ThinkingConfig;
 }
@@ -270,6 +272,9 @@ export function getProviderSettings(): AIProviderSettings {
 										"openrouter"
 									? "openrouter"
 									: undefined,
+						chatThinking: parseThinking(
+							parsed?.providers?.openrouter?.chatThinking,
+						),
 						maxCompletionTokens:
 							parsed?.providers?.openrouter?.maxCompletionTokens ?? undefined,
 						thinking: parsed?.providers?.openrouter?.thinking ?? {
@@ -307,6 +312,9 @@ export function getProviderSettings(): AIProviderSettings {
 										"openrouter"
 									? "openrouter"
 									: undefined,
+						chatThinking: parseThinking(
+							parsed?.providers?.generalcompute?.chatThinking,
+						),
 						maxCompletionTokens:
 							parsed?.providers?.generalcompute?.maxCompletionTokens ??
 							undefined,

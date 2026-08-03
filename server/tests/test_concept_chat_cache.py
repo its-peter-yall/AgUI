@@ -106,6 +106,62 @@ class TestConceptChatCaching(unittest.TestCase):
         self.assertIsInstance(sys_msg["content"], str)
         self.assertNotIn("cache_control", sys_msg)
 
+    def test_openrouter_thinking_extra_body(self):
+        client = _make_client()
+        captured = {}
+
+        async def go():
+            with patch(
+                "server.services.concept_chat._get_client", return_value=client
+            ):
+                async for _ in stream_concept_chat(
+                    api_key="k",
+                    model_slug="openai/o3",
+                    message="Why?",
+                    history=[],
+                    content_markdown="content",
+                    selected_heading_ids=[],
+                    node_title="Node",
+                    provider="openrouter",
+                    thinking_enabled=True,
+                    thinking_effort="medium",
+                ):
+                    pass
+            _, kwargs = client.chat.completions.create.call_args
+            captured["extra_body"] = kwargs.get("extra_body")
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured["extra_body"],
+            {"reasoning": {"effort": "medium"}},
+        )
+
+    def test_thinking_disabled_no_extra_body(self):
+        client = _make_client()
+        captured = {}
+
+        async def go():
+            with patch(
+                "server.services.concept_chat._get_client", return_value=client
+            ):
+                async for _ in stream_concept_chat(
+                    api_key="k",
+                    model_slug="openai/o3",
+                    message="Why?",
+                    history=[],
+                    content_markdown="content",
+                    selected_heading_ids=[],
+                    node_title="Node",
+                    provider="openrouter",
+                    thinking_enabled=False,
+                ):
+                    pass
+            _, kwargs = client.chat.completions.create.call_args
+            captured["extra_body"] = kwargs.get("extra_body")
+
+        asyncio.run(go())
+        self.assertIsNone(captured["extra_body"])
+
 
 if __name__ == "__main__":
     unittest.main()

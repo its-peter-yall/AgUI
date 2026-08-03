@@ -183,4 +183,19 @@ describe('agent model settings', () => {
     expect(areAgentModelsConfigured(getProviderSettings())).toBe(true);
     expect(getProviderSettings().agentModels?.researcher?.modelId).toBe('r');
   });
+
+  it('round-trips chatThinking with chat model', () => {
+    setProviderConfig('openrouter', {
+      apiKey: 'k',
+      model: 'm',
+      modelTitle: 'M',
+      chatModel: 'or/think',
+      chatModelTitle: 'Think',
+      chatModelProvider: 'openrouter',
+      chatThinking: { enabled: true, effort: 'medium' },
+    });
+    const cfg = getProviderSettings().providers.openrouter;
+    expect(cfg.chatThinking).toEqual({ enabled: true, effort: 'medium' });
+    expect(cfg.chatModel).toBe('or/think');
+  });
 });

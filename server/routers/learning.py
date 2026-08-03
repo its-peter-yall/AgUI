@@ -1522,11 +1522,21 @@ async def concept_chat(
     x_model: str = Header(None, alias="X-Model"),
     x_chat_model: str = Header(None, alias="X-Chat-Model"),
     x_ai_provider: Optional[str] = Header(None, alias="X-AI-Provider"),
+    x_thinking_enabled: Optional[str] = Header(
+        None, alias="X-Thinking-Enabled"
+    ),
+    x_thinking_effort: Optional[str] = Header(
+        None, alias="X-Thinking-Effort"
+    ),
 ) -> StreamingResponse:
     """Stream a context-aware chat response for a concept node."""
     logger.info(
-        "DEBUG chat headers: x_ai_provider=%s, x_provider_api_key present=%s, x_chat_model=%s",
-        x_ai_provider, bool(x_provider_api_key), x_chat_model
+        "DEBUG chat headers: x_ai_provider=%s, x_provider_api_key present=%s, "
+        "x_chat_model=%s, thinking=%s",
+        x_ai_provider,
+        bool(x_provider_api_key),
+        x_chat_model,
+        x_thinking_enabled,
     )
     if not x_provider_api_key or not x_provider_api_key.strip():
         raise HTTPException(
@@ -1573,6 +1583,16 @@ async def concept_chat(
             detail="Internal server error",
         )
 
+    thinking_on = bool(
+        x_thinking_enabled and x_thinking_enabled.lower() == "true"
+    )
+    valid_efforts = {"minimal", "low", "medium", "high", "xhigh"}
+    thinking_effort = None
+    if x_thinking_effort and x_thinking_effort in valid_efforts:
+        thinking_effort = x_thinking_effort
+    elif thinking_on:
+        thinking_effort = "high"
+
     return StreamingResponse(
         stream_concept_chat(
             api_key=x_provider_api_key.strip(),
@@ -1583,6 +1603,8 @@ async def concept_chat(
             selected_heading_ids=request_body.selected_heading_ids,
             node_title=node["title"],
             provider=(x_ai_provider or "openrouter").strip(),
+            thinking_enabled=thinking_on,
+            thinking_effort=thinking_effort,
         ),
         media_type="text/event-stream",
     )

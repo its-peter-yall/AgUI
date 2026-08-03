@@ -28,10 +28,11 @@
  * ============================================================================
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import {
 	Sun,
 	Moon,
@@ -48,8 +49,14 @@ import { OpenRouterSettingsPanel } from "./OpenRouterSettingsPanel";
 import { WebSearchSettingsPanel } from "./WebSearchSettingsPanel";
 import { AgentModelsPanel } from "./AgentModelsPanel";
 import { ModelPicker } from "./ModelPicker";
+import { ThinkingModeToggle } from "./ThinkingModeToggle";
 import { getProviderSettings, setProviderConfig } from "@/lib/providerSettings";
-import type { AIProvider } from "@/types/provider";
+import { getProviderModels, ProviderApiError } from "@/lib/providerApi";
+import type {
+	AIProvider,
+	ProviderModel,
+	ThinkingEffort,
+} from "@/types/provider";
 import { cn } from "@/lib/utils";
 
 type SettingsSectionKey =
@@ -127,17 +134,64 @@ export function SettingsPage() {
 
 	const handleChatModelSelect = useCallback(
 		(provider: AIProvider, modelId: string, modelTitle: string) => {
-			setProviderConfig(settings.activeProvider, {
+			const latest = getProviderSettings();
+			const bucket = latest.activeProvider;
+			const prev = latest.providers[bucket];
+			setProviderConfig(bucket, {
 				chatModel: modelId,
 				chatModelTitle: modelTitle,
 				chatModelProvider: provider,
+				chatThinking:
+					prev.chatThinking ?? { enabled: false, effort: "high" },
 			});
 			setSettings(getProviderSettings());
 		},
-		[settings.activeProvider],
+		[],
+	);
+
+	const handleChatThinkingChange = useCallback(
+		(enabled: boolean, effort: ThinkingEffort) => {
+			const latest = getProviderSettings();
+			const bucket = latest.activeProvider;
+			const prev = latest.providers[bucket];
+			if (!prev.chatModel) return;
+			setProviderConfig(bucket, {
+				chatThinking: { enabled, effort },
+			});
+			setSettings(getProviderSettings());
+		},
+		[],
 	);
 
 	const activeConfig = settings.providers[settings.activeProvider];
+	const chatProvider =
+		activeConfig.chatModelProvider ?? settings.activeProvider;
+
+	const { data: orModels } = useQuery<ProviderModel[], ProviderApiError>({
+		queryKey: [
+			"provider-models",
+			"openrouter",
+			settings.providers.openrouter.apiKey,
+		],
+		queryFn: () =>
+			getProviderModels(
+				"openrouter",
+				settings.providers.openrouter.apiKey,
+			),
+		enabled: settings.providers.openrouter.apiKey.trim().length > 0,
+		staleTime: 1000 * 60 * 60 * 24,
+		retry: false,
+	});
+
+	const chatSupportsThinking = useMemo(() => {
+		if (chatProvider !== "openrouter" || !activeConfig.chatModel) {
+			return false;
+		}
+		return (
+			orModels?.find((m) => m.id === activeConfig.chatModel)
+				?.supports_thinking ?? false
+		);
+	}, [chatProvider, activeConfig.chatModel, orModels]);
 
 	const toggleSection = useCallback((section: SettingsSectionKey) => {
 		setExpandedSections((current) => ({
@@ -345,11 +399,10 @@ export function SettingsPage() {
 						<ModelPicker
 							openRouterKey={settings.providers.openrouter.apiKey}
 							generalComputeKey={settings.providers.generalcompute.apiKey}
-							activeProvider={
-								activeConfig.chatModelProvider ?? settings.activeProvider
-							}
+							activeProvider={chatProvider}
 							activeModel={activeConfig.chatModel ?? ""}
 							onSelect={handleChatModelSelect}
+							idPrefix="chat-assistant"
 						/>
 						{activeConfig.chatModelTitle && (
 							<p className="text-xs text-muted-foreground mt-2">
@@ -358,6 +411,16 @@ export function SettingsPage() {
 									{activeConfig.chatModelTitle}
 								</span>
 							</p>
+						)}
+						{chatProvider === "openrouter" && activeConfig.chatModel && (
+							<div className="mt-4 pt-4 border-t border-border">
+								<ThinkingModeToggle
+									enabled={activeConfig.chatThinking?.enabled ?? false}
+									effort={activeConfig.chatThinking?.effort ?? "high"}
+									onChange={handleChatThinkingChange}
+									supportsThinking={chatSupportsThinking}
+								/>
+							</div>
 						)}
 					</div>
 				</SettingsSection>

@@ -79,11 +79,14 @@ export async function streamConceptChat({
 		settings.providers[settings.activeProvider].model ||
 		"";
 
+	const chatThinking =
+		chatProvider === "openrouter" ? activeConfig.chatThinking : undefined;
+
 	const providerHeaders = buildProviderHeaders(
 		chatProvider,
 		chatProviderConfig.apiKey,
-		chatProviderConfig.model || undefined,
-		chatProviderConfig.thinking,
+		chatModel || chatProviderConfig.model || undefined,
+		chatThinking,
 		chatProviderConfig.maxCompletionTokens,
 	);
 
