@@ -166,14 +166,38 @@ export function WebSearchSettingsPanel() {
                       </span>
                     )}
                   </div>
-                  <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground shrink-0 cursor-pointer">
+                  <label
+                    className={cn(
+                      'inline-flex items-center gap-1.5 shrink-0 cursor-pointer',
+                      'text-xs text-muted-foreground rounded-full',
+                      'focus-within:outline-none focus-within:ring-2',
+                      'focus-within:ring-[#ffb74d] focus-within:ring-offset-2',
+                    )}
+                  >
                     <input
                       type="checkbox"
                       checked={config.enabled}
                       onChange={() => handleEnableToggle(providerId)}
                       aria-label={`Enable ${meta.displayName}`}
-                      className="rounded border-border text-[#ffb74d] focus:ring-[#ffb74d]"
+                      className="peer sr-only"
                     />
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        'relative inline-flex h-5 w-10 items-center',
+                        'rounded-full border border-border bg-muted',
+                        'transition-colors peer-checked:border-[#ffb74d]',
+                        'peer-checked:bg-[#ffb74d]',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-4 w-4 translate-x-1 rounded-full',
+                          'bg-white shadow-lg transition-transform',
+                          'peer-checked:translate-x-5',
+                        )}
+                      />
+                    </span>
                     Enable
                   </label>
                 </div>
