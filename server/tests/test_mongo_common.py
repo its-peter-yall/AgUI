@@ -31,6 +31,7 @@ from server.database.repositories.mongo_common import (
 )
 from server.database.repositories.mongo_indexes import (
     ensure_learning_indexes,
+    ensure_operational_indexes,
 )
 from server.schemas.generation import GenerationCounts
 
@@ -70,6 +71,25 @@ class MongoCommonTests(unittest.TestCase):
         )
         database["revision_node_progress"].create_index.assert_any_call(
             [("revision_session_id", 1), ("node_id", 1)],
+            unique=True,
+        )
+
+    def test_operational_indexes_match_sqlite_uniques(self) -> None:
+        database = MagicMock()
+        ensure_operational_indexes(database)
+
+        database["generation_jobs"].create_index.assert_has_calls(
+            [
+                call([("session_id", 1)], unique=True),
+                call([("thread_id", 1)], unique=True),
+            ]
+        )
+        database["research_sources"].create_index.assert_any_call(
+            [("session_id", 1), ("canonical_url", 1)],
+            unique=True,
+        )
+        database["progress_events"].create_index.assert_any_call(
+            [("session_id", 1), ("dedupe_key", 1)],
             unique=True,
         )
 
