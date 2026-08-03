@@ -24,6 +24,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from pydantic import ValidationError
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -37,6 +38,8 @@ from server.schemas.learning import (
     NodeStatus,
     QuizCard,
     QuizSet,
+    convert_legacy_quiz_card,
+    convert_legacy_to_quiz_set,
 )
 
 logger = logging.getLogger(__name__)
@@ -619,3 +622,756 @@ class MongoLearningRepository:
             quiz_doc.get("payload") if quiz_doc is not None else None
         )
         return row
+
+    def create_quiz_set(
+        self,
+        node_id: str,
+        quiz_set: QuizSet,
+        shuffle_seed: Optional[str] = None,
+    ) -> dict[str, Any]:
+        now = utc_iso()
+        document = {
+            "_id": str(uuid.uuid4()),
+            "node_id": node_id,
+            "payload": model_payload(quiz_set),
+            "format_version": 1,
+            "shuffle_seed": shuffle_seed,
+            "current_index": quiz_set.current_index,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._quizzes.replace_one(
+            {"node_id": node_id},
+            document,
+            upsert=True,
+        )
+        return document_to_row(document) or {}
+
+    def get_quiz_set_for_node(
+        self,
+        node_id: str,
+    ) -> Optional[dict[str, Any]]:
+        row = self._quizzes.find_one({"node_id": node_id})
+        if row is None:
+            return None
+        payload = row.get("payload")
+        format_version = row.get("format_version")
+        if format_version is None or format_version < 1:
+            quiz_set = convert_legacy_to_quiz_set(payload)
+            shuffle_seed = row.get("shuffle_seed")
+            current_index = row.get("current_index") or 0
+        else:
+            try:
+                quiz_set = QuizSet.model_validate(payload)
+                shuffle_seed = row.get("shuffle_seed")
+                current_index = row.get("current_index")
+            except ValidationError:
+                logger.warning(
+                    "Detected stale format_version for legacy quiz row: "
+                    "node_id=%s. Falling back to wrapped legacy quiz.",
+                    node_id,
+                )
+                quiz_set = convert_legacy_to_quiz_set(payload)
+                shuffle_seed = None
+                current_index = 0
+                format_version = 0
+        return {
+            "quiz_set": quiz_set,
+            "format_version": format_version or 0,
+            "shuffle_seed": shuffle_seed,
+            "current_index": current_index,
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def get_quiz_for_node(self, node_id: str) -> Optional[QuizCard]:
+        row = self._quizzes.find_one({"node_id": node_id})
+        if row is None:
+            return None
+        payload = row.get("payload")
+        format_version = row.get("format_version")
+        current_index = row.get("current_index")
+        if format_version is None or format_version < 1:
+            return convert_legacy_quiz_card(payload)
+        try:
+            quiz_set = QuizSet.model_validate(payload)
+        except ValidationError:
+            logger.warning(
+                "Detected stale format_version for legacy quiz row: "
+                "node_id=%s. Falling back to legacy parsing.",
+                node_id,
+            )
+            return convert_legacy_quiz_card(payload)
+        if quiz_set.quizzes:
+            idx = (
+                current_index
+                if current_index is not None
+                else quiz_set.current_index
+            )
+            return quiz_set.quizzes[idx]
+        return None
+
+    def update_quiz_shuffle_seed(
+        self,
+        node_id: str,
+        shuffle_seed: str,
+    ) -> bool:
+        result = self._quizzes.update_one(
+            {"node_id": node_id},
+            {
+                "$set": {
+                    "shuffle_seed": shuffle_seed,
+                    "updated_at": utc_iso(),
+                }
+            },
+        )
+        return result.matched_count > 0
+
+    def decrement_quiz_set_progress(
+        self,
+        node_id: str,
+    ) -> Optional[dict[str, Any]]:
+        row = self._quizzes.find_one({"node_id": node_id})
+        if row is None:
+            return None
+        format_version = row.get("format_version")
+        if format_version is None or format_version < 1:
+            return None
+        current_index = row.get("current_index") or 0
+        if current_index <= 0:
+            return self._get_node_by_id(node_id)
+        new_index = current_index - 1
+        self._quizzes.update_one(
+            {"node_id": node_id},
+            {
+                "$set": {
+                    "current_index": new_index,
+                    "updated_at": utc_iso(),
+                }
+            },
+        )
+        return self._get_node_by_id(node_id)
+
+    def update_quiz_set_progress(
+        self,
+        node_id: str,
+        current_index: int,
+    ) -> Optional[dict[str, Any]]:
+        row = self._quizzes.find_one({"node_id": node_id})
+        if row is None:
+            return None
+        payload = row.get("payload")
+        format_version = row.get("format_version")
+        if format_version is None or format_version < 1:
+            total_quizzes = 1
+        else:
+            quiz_set_data = QuizSet.model_validate(payload)
+            total_quizzes = len(quiz_set_data.quizzes)
+        if current_index < 0 or current_index >= total_quizzes:
+            raise ValueError(
+                f"Invalid current_index {current_index} for quiz set "
+                f"with {total_quizzes} quizzes"
+            )
+        self._quizzes.update_one(
+            {"node_id": node_id},
+            {
+                "$set": {
+                    "current_index": current_index,
+                    "updated_at": utc_iso(),
+                }
+            },
+        )
+        return self.get_quiz_set_for_node(node_id)
+
+    def create_quiz_attempt(
+        self,
+        node_id: str,
+        selected_option_ids: list[str],
+        quiz_index: int = 0,
+        revision_session_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        node = self._get_node_by_id(node_id)
+        if node is None:
+            raise ValueError(f"Concept node not found: {node_id}")
+        session_id = node["learning_session_id"]
+        quiz_set_data = self.get_quiz_set_for_node(node_id)
+        if quiz_set_data is None:
+            raise ValueError(f"No quiz found for node: {node_id}")
+        quiz_set = quiz_set_data["quiz_set"]
+        if quiz_index < 0 or quiz_index >= len(quiz_set.quizzes):
+            raise ValueError(
+                f"Invalid quiz_index {quiz_index} for quiz set with "
+                f"{len(quiz_set.quizzes)} quizzes"
+            )
+        quiz = quiz_set.quizzes[quiz_index]
+        question_type = getattr(quiz, "question_type", "single_choice")
+        correct_options = [opt for opt in quiz.options if opt.is_correct]
+        correct_option_ids_set = {opt.option_id for opt in correct_options}
+        selected_options = []
+        for opt_id in selected_option_ids:
+            found = False
+            for opt in quiz.options:
+                if opt.option_id == opt_id:
+                    selected_options.append(opt)
+                    found = True
+                    break
+            if not found:
+                raise ValueError(f"Invalid option id: {opt_id}")
+        selected_option_id_set = set(selected_option_ids)
+        if question_type == "single_choice":
+            is_correct = (
+                len(selected_options) == 1
+                and selected_options[0].is_correct
+            )
+        else:
+            is_correct = correct_option_ids_set == selected_option_id_set
+        score_percent = 100 if is_correct else 0
+        attempt_number = (
+            self._attempts.count_documents({"node_id": node_id}) + 1
+        )
+        attempt_id = str(uuid.uuid4())
+        now = utc_iso()
+        document = {
+            "_id": attempt_id,
+            "node_id": node_id,
+            "attempt_number": attempt_number,
+            "quiz_index": quiz_index,
+            "selected_option_id": selected_option_ids,
+            "revision_session_id": revision_session_id,
+            "is_correct": is_correct,
+            "score_percent": score_percent,
+            "created_at": now,
+        }
+        self._attempts.insert_one(document)
+        if revision_session_id is None:
+            self._sessions.update_one(
+                {"_id": session_id},
+                {
+                    "$set": {
+                        "last_active_node_id": node_id,
+                        "updated_at": now,
+                    }
+                },
+            )
+        total_quizzes = len(quiz_set.quizzes)
+        if total_quizzes == 1:
+            is_mastered = is_correct
+        else:
+            is_mastered = self._check_multi_quiz_mastery(
+                node_id,
+                total_quizzes,
+            )
+        return {
+            "id": attempt_id,
+            "node_id": node_id,
+            "attempt_number": attempt_number,
+            "quiz_index": quiz_index,
+            "selected_option_ids": selected_option_ids,
+            "is_correct": is_correct,
+            "score_percent": score_percent,
+            "correct_option_ids": (
+                list(correct_option_ids_set) if is_correct else []
+            ),
+            "explanation": (
+                correct_options[0].explanation
+                if correct_options and is_correct
+                else ""
+            ),
+            "selected_explanation": (
+                selected_options[0].explanation
+                if not is_correct and selected_options
+                else None
+            ),
+            "is_mastered": is_mastered,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def get_quiz_attempts(self, node_id: str) -> dict[str, Any]:
+        cursor = self._attempts.find({"node_id": node_id}).sort(
+            "attempt_number",
+            ASCENDING,
+        )
+        quiz_set_data = self.get_quiz_set_for_node(node_id)
+        quiz_set = (
+            quiz_set_data["quiz_set"] if quiz_set_data is not None else None
+        )
+        attempts: list[dict[str, Any]] = []
+        best_score = 0
+        for row in cursor:
+            score = int(row.get("score_percent") or 0)
+            if score > best_score:
+                best_score = score
+            quiz_index = int(row.get("quiz_index") or 0)
+            selected_raw = row.get("selected_option_id")
+            if isinstance(selected_raw, list):
+                selected_option_ids = selected_raw
+            elif isinstance(selected_raw, str):
+                selected_option_ids = [selected_raw]
+            else:
+                selected_option_ids = []
+            correct_option_ids: list[str] = []
+            explanation = ""
+            if quiz_set is not None and quiz_index < len(quiz_set.quizzes):
+                quiz = quiz_set.quizzes[quiz_index]
+                for option in quiz.options:
+                    if option.is_correct:
+                        correct_option_ids.append(option.option_id)
+                for option in quiz.options:
+                    if option.option_id in selected_option_ids:
+                        explanation = option.explanation
+                        break
+                if not explanation:
+                    for option in quiz.options:
+                        if option.is_correct:
+                            explanation = option.explanation
+                            break
+            attempts.append(
+                {
+                    "id": row.get("_id"),
+                    "node_id": row.get("node_id"),
+                    "attempt_number": row.get("attempt_number"),
+                    "quiz_index": quiz_index,
+                    "selected_option_ids": selected_option_ids,
+                    "is_correct": bool(row.get("is_correct")),
+                    "score_percent": score,
+                    "created_at": row.get("created_at"),
+                    "correct_option_ids": correct_option_ids,
+                    "explanation": explanation,
+                    "is_mastered": score >= 100,
+                }
+            )
+        is_mastered = self._calculate_mastery_from_attempts(
+            node_id,
+            attempts,
+        )
+        return {
+            "node_id": node_id,
+            "total_attempts": len(attempts),
+            "is_mastered": is_mastered,
+            "best_score": best_score,
+            "attempts": attempts,
+        }
+
+    def check_mastery(self, node_id: str) -> bool:
+        quiz_set_data = self.get_quiz_set_for_node(node_id)
+        if quiz_set_data is None:
+            return False
+        quiz_set = quiz_set_data["quiz_set"]
+        total_quizzes = len(quiz_set.quizzes)
+        if total_quizzes == 1:
+            return (
+                self._attempts.find_one(
+                    {"node_id": node_id, "is_correct": True}
+                )
+                is not None
+            )
+        return self._check_multi_quiz_mastery(node_id, total_quizzes)
+
+    def create_revision_session(
+        self,
+        original_session_id: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        allowed_modes = {"full_review", "quiz_only"}
+        if mode not in allowed_modes:
+            raise ValueError(f"Invalid revision mode: {mode}")
+        session = self._sessions.find_one({"_id": original_session_id})
+        if session is None:
+            raise LookupError(
+                f"Learning session not found: {original_session_id}"
+            )
+        nodes = list(
+            self._nodes.find({"learning_session_id": original_session_id})
+        )
+        nodes.sort(key=lambda item: int(item.get("sequence_index") or 0))
+        is_completed = session.get("status") == "completed"
+        if not is_completed:
+            total_nodes = len(nodes)
+            completed_nodes = sum(
+                1
+                for node in nodes
+                if node.get("status") == NodeStatus.COMPLETED.value
+            )
+            is_completed = total_nodes > 0 and completed_nodes == total_nodes
+        if not is_completed:
+            raise ValueError(
+                "Revision sessions can only be created for completed sessions"
+            )
+        revision_number = (
+            self._revisions.count_documents(
+                {"original_session_id": original_session_id}
+            )
+            + 1
+        )
+        revision_id = str(uuid.uuid4())
+        now = utc_iso()
+        revision_doc = {
+            "_id": revision_id,
+            "original_session_id": original_session_id,
+            "revision_number": revision_number,
+            "mode": mode,
+            "status": "in_progress",
+            "progress_percent": 0,
+            "total_quiz_score_percent": None,
+            "started_at": now,
+            "completed_at": None,
+        }
+        self._revisions.insert_one(revision_doc)
+        progress_rows: list[dict[str, Any]] = []
+        progress_docs: list[dict[str, Any]] = []
+        for node in nodes:
+            progress_id = str(uuid.uuid4())
+            progress_docs.append(
+                {
+                    "_id": progress_id,
+                    "revision_session_id": revision_id,
+                    "node_id": node["_id"],
+                    "status": "pending",
+                    "reviewed_at": None,
+                }
+            )
+            progress_rows.append(
+                {
+                    "id": progress_id,
+                    "revision_session_id": revision_id,
+                    "node_id": node["_id"],
+                    "node_title": node.get("title"),
+                    "sequence_index": int(node.get("sequence_index") or 0),
+                    "status": "pending",
+                    "reviewed_at": None,
+                }
+            )
+        if progress_docs:
+            self._revision_nodes.insert_many(progress_docs)
+        return {
+            "id": revision_id,
+            "original_session_id": original_session_id,
+            "revision_number": revision_number,
+            "mode": mode,
+            "status": "in_progress",
+            "progress_percent": 0,
+            "total_quiz_score_percent": None,
+            "started_at": now,
+            "completed_at": None,
+            "nodes": progress_rows,
+        }
+
+    def get_revisions_for_session(
+        self,
+        session_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        query = {"original_session_id": session_id}
+        total = self._revisions.count_documents(query)
+        cursor = (
+            self._revisions.find(query)
+            .sort("started_at", DESCENDING)
+            .skip(max(offset, 0))
+            .limit(max(limit, 0))
+        )
+        revisions = []
+        for row in cursor:
+            item = document_to_row(row) or {}
+            item["revision_number"] = int(item.get("revision_number") or 0)
+            item["progress_percent"] = int(item.get("progress_percent") or 0)
+            revisions.append(item)
+        return revisions, total
+
+    def get_revision_session(
+        self,
+        revision_id: str,
+    ) -> Optional[dict[str, Any]]:
+        revision = self._revisions.find_one({"_id": revision_id})
+        if revision is None:
+            return None
+        progress_docs = list(
+            self._revision_nodes.find(
+                {"revision_session_id": revision_id}
+            )
+        )
+        node_ids = [doc["node_id"] for doc in progress_docs]
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        if node_ids:
+            for node in self._nodes.find({"_id": {"$in": node_ids}}):
+                nodes_by_id[node["_id"]] = node
+        progress_rows = []
+        for doc in progress_docs:
+            node = nodes_by_id.get(doc["node_id"], {})
+            progress_rows.append(
+                {
+                    "id": doc["_id"],
+                    "revision_session_id": doc["revision_session_id"],
+                    "node_id": doc["node_id"],
+                    "node_title": node.get("title"),
+                    "sequence_index": int(node.get("sequence_index") or 0),
+                    "status": doc.get("status"),
+                    "reviewed_at": doc.get("reviewed_at"),
+                }
+            )
+        progress_rows.sort(key=lambda item: item["sequence_index"])
+        result = document_to_row(revision) or {}
+        result["revision_number"] = int(result.get("revision_number") or 0)
+        result["progress_percent"] = int(result.get("progress_percent") or 0)
+        result["nodes"] = progress_rows
+        return result
+
+    def delete_revision_session(self, revision_id: str) -> bool:
+        self._attempts.delete_many({"revision_session_id": revision_id})
+        self._revision_nodes.delete_many(
+            {"revision_session_id": revision_id}
+        )
+        result = self._revisions.delete_one({"_id": revision_id})
+        return result.deleted_count > 0
+
+    def mark_revision_node_reviewed(
+        self,
+        revision_id: str,
+        node_id: str,
+    ) -> dict[str, Any]:
+        revision = self._revisions.find_one({"_id": revision_id})
+        if revision is None:
+            raise LookupError(f"Revision session not found: {revision_id}")
+        if revision.get("mode") != "full_review":
+            raise ValueError(
+                "mark-reviewed is only allowed for full_review revisions"
+            )
+        now = utc_iso()
+        updated = self._revision_nodes.find_one_and_update(
+            {"revision_session_id": revision_id, "node_id": node_id},
+            {"$set": {"status": "reviewed", "reviewed_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if updated is None:
+            raise LookupError(
+                f"Revision node not found for revision {revision_id}: "
+                f"{node_id}"
+            )
+        self._update_revision_progress(revision_id)
+        return {
+            "id": updated["_id"],
+            "revision_session_id": updated["revision_session_id"],
+            "node_id": updated["node_id"],
+            "status": updated["status"],
+            "reviewed_at": updated["reviewed_at"],
+        }
+
+    def submit_revision_quiz(
+        self,
+        revision_id: str,
+        node_id: str,
+        selected_option_ids: list[str],
+        quiz_index: int = 0,
+    ) -> dict[str, Any]:
+        revision = self._revisions.find_one({"_id": revision_id})
+        if revision is None:
+            raise LookupError(f"Revision session not found: {revision_id}")
+        progress = self._revision_nodes.find_one(
+            {"revision_session_id": revision_id, "node_id": node_id}
+        )
+        if progress is None:
+            raise LookupError(
+                f"Revision node not found for revision {revision_id}: "
+                f"{node_id}"
+            )
+        quiz_result = self.create_quiz_attempt(
+            node_id=node_id,
+            selected_option_ids=selected_option_ids,
+            quiz_index=quiz_index,
+            revision_session_id=revision_id,
+        )
+        next_status = (
+            "quiz_passed" if quiz_result["is_correct"] else "quiz_failed"
+        )
+        if progress.get("status") == "quiz_passed":
+            next_status = "quiz_passed"
+        now = utc_iso()
+        set_fields: dict[str, Any] = {"status": next_status}
+        if next_status == "quiz_passed" and progress.get("reviewed_at") is None:
+            set_fields["reviewed_at"] = now
+        self._revision_nodes.update_one(
+            {"revision_session_id": revision_id, "node_id": node_id},
+            {"$set": set_fields},
+        )
+        self._update_revision_progress(revision_id)
+        return {
+            "is_correct": bool(quiz_result["is_correct"]),
+            "correct_option_ids": quiz_result.get("correct_option_ids", []),
+            "explanation": quiz_result.get("explanation"),
+            "selected_explanation": quiz_result.get("selected_explanation"),
+            "revision_node_status": next_status,
+        }
+
+    def get_revision_summary(self, revision_id: str) -> dict[str, Any]:
+        revision = self._revisions.find_one({"_id": revision_id})
+        if revision is None:
+            raise LookupError(f"Revision session not found: {revision_id}")
+        progress_docs = list(
+            self._revision_nodes.find({"revision_session_id": revision_id})
+        )
+        nodes_total = len(progress_docs)
+        nodes_reviewed = sum(
+            1 for doc in progress_docs if doc.get("status") != "pending"
+        )
+        attempt_docs = list(
+            self._attempts.find({"revision_session_id": revision_id})
+        )
+        quizzes_total = len(attempt_docs)
+        quizzes_passed = sum(
+            1 for doc in attempt_docs if doc.get("is_correct")
+        )
+        quizzes_failed = max(quizzes_total - quizzes_passed, 0)
+        revision_quiz_score_percent = (
+            (quizzes_passed * 100) // quizzes_total
+            if quizzes_total > 0
+            else None
+        )
+        total_quiz_score_percent = (
+            revision_quiz_score_percent
+            if revision_quiz_score_percent is not None
+            else revision.get("total_quiz_score_percent")
+        )
+        node_ids = [doc["node_id"] for doc in progress_docs]
+        comparison = None
+        if quizzes_total > 0 and node_ids:
+            original_attempts = list(
+                self._attempts.find(
+                    {
+                        "revision_session_id": None,
+                        "node_id": {"$in": node_ids},
+                    }
+                )
+            )
+            original_total = len(original_attempts)
+            if (
+                original_total > 0
+                and revision_quiz_score_percent is not None
+            ):
+                original_passed = sum(
+                    1
+                    for doc in original_attempts
+                    if doc.get("is_correct")
+                )
+                original_score = (original_passed * 100) // original_total
+                comparison = {
+                    "original_quiz_score_percent": original_score,
+                    "improvement_percent": (
+                        revision_quiz_score_percent - original_score
+                    ),
+                }
+        started_at = revision.get("started_at")
+        completed_at = revision.get("completed_at")
+        time_spent_seconds = None
+        if started_at and completed_at:
+            try:
+                from datetime import datetime
+
+                started_dt = datetime.fromisoformat(str(started_at))
+                completed_dt = datetime.fromisoformat(str(completed_at))
+                delta = int((completed_dt - started_dt).total_seconds())
+                time_spent_seconds = max(delta, 0)
+            except ValueError:
+                time_spent_seconds = None
+        return {
+            "revision_id": revision["_id"],
+            "mode": revision.get("mode"),
+            "progress_percent": int(revision.get("progress_percent") or 0),
+            "total_quiz_score_percent": total_quiz_score_percent,
+            "nodes_reviewed": nodes_reviewed,
+            "nodes_total": nodes_total,
+            "quizzes_passed": quizzes_passed,
+            "quizzes_failed": quizzes_failed,
+            "quizzes_total": quizzes_total,
+            "time_spent_seconds": time_spent_seconds,
+            "comparison": comparison,
+        }
+
+    def _update_revision_progress(
+        self,
+        revision_id: str,
+    ) -> dict[str, Any]:
+        if self._revisions.find_one({"_id": revision_id}) is None:
+            raise LookupError(f"Revision session not found: {revision_id}")
+        progress_docs = list(
+            self._revision_nodes.find({"revision_session_id": revision_id})
+        )
+        total_nodes = len(progress_docs)
+        completed_nodes = sum(
+            1 for doc in progress_docs if doc.get("status") != "pending"
+        )
+        quizzes_passed = sum(
+            1 for doc in progress_docs if doc.get("status") == "quiz_passed"
+        )
+        quizzes_failed = sum(
+            1 for doc in progress_docs if doc.get("status") == "quiz_failed"
+        )
+        progress_percent = _calculate_progress_percent(
+            completed_nodes,
+            total_nodes,
+        )
+        quiz_attempted = quizzes_passed + quizzes_failed
+        total_quiz_score_percent = (
+            (quizzes_passed * 100) // quiz_attempted
+            if quiz_attempted > 0
+            else None
+        )
+        next_status = (
+            "completed"
+            if total_nodes > 0 and completed_nodes >= total_nodes
+            else "in_progress"
+        )
+        now = utc_iso()
+        set_fields: dict[str, Any] = {
+            "progress_percent": progress_percent,
+            "status": next_status,
+            "total_quiz_score_percent": total_quiz_score_percent,
+        }
+        if next_status == "completed":
+            existing = self._revisions.find_one(
+                {"_id": revision_id},
+                {"completed_at": 1},
+            )
+            if existing is not None and existing.get("completed_at") is None:
+                set_fields["completed_at"] = now
+        self._revisions.update_one(
+            {"_id": revision_id},
+            {"$set": set_fields},
+        )
+        return {
+            "revision_id": revision_id,
+            "status": next_status,
+            "progress_percent": progress_percent,
+            "total_quiz_score_percent": total_quiz_score_percent,
+        }
+
+    def _check_multi_quiz_mastery(
+        self,
+        node_id: str,
+        total_quizzes: int,
+    ) -> bool:
+        correct_indices = {
+            int(doc.get("quiz_index") or 0)
+            for doc in self._attempts.find(
+                {"node_id": node_id, "is_correct": True}
+            )
+        }
+        return correct_indices.issuperset(set(range(total_quizzes)))
+
+    def _calculate_mastery_from_attempts(
+        self,
+        node_id: str,
+        attempts: list[dict[str, Any]],
+    ) -> bool:
+        if not attempts:
+            return False
+        quiz_set_data = self.get_quiz_set_for_node(node_id)
+        if quiz_set_data is None:
+            return False
+        total_quizzes = len(quiz_set_data["quiz_set"].quizzes)
+        if total_quizzes == 1:
+            return any(item["is_correct"] for item in attempts)
+        correct_indices = {
+            item["quiz_index"] for item in attempts if item["is_correct"]
+        }
+        return correct_indices.issuperset(set(range(total_quizzes)))

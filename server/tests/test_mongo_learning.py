@@ -82,6 +82,14 @@ def make_quiz_set() -> QuizSet:
 class MongoLearningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.database = MagicMock()
+        self.collections: dict[str, MagicMock] = {}
+
+        def get_collection(name: str) -> MagicMock:
+            if name not in self.collections:
+                self.collections[name] = MagicMock(name=name)
+            return self.collections[name]
+
+        self.database.__getitem__.side_effect = get_collection
         self.repository = MongoLearningRepository(self.database)
 
     @patch("server.database.repositories.mongo_learning.uuid.uuid4")
@@ -154,6 +162,55 @@ class MongoLearningTests(unittest.TestCase):
         )
         self.assertEqual(result["id"], "n1")
 
+    def test_create_quiz_set_stores_native_payload(self) -> None:
+        quiz_set = make_quiz_set()
+        self.repository.create_quiz_set("n1", quiz_set, "seed")
+        update = self.database["quiz_data"].replace_one.call_args.args[1]
+        self.assertIsInstance(update["payload"], dict)
+        self.assertEqual(update["format_version"], 1)
+        self.assertEqual(update["shuffle_seed"], "seed")
+
+    def test_create_attempt_uses_next_attempt_number(self) -> None:
+        attempts = self.database["quiz_attempts"]
+        attempts.count_documents.return_value = 2
+        self.database["concept_nodes"].find_one.return_value = {
+            "_id": "n1",
+            "learning_session_id": "s1",
+        }
+        self.database["quiz_data"].find_one.return_value = {
+            "node_id": "n1",
+            "payload": make_quiz_set().model_dump(mode="json"),
+            "format_version": 1,
+            "current_index": 0,
+        }
+        result = self.repository.create_quiz_attempt(
+            "n1",
+            ["option-1"],
+        )
+        inserted = attempts.insert_one.call_args.args[0]
+        self.assertEqual(inserted["attempt_number"], 3)
+        self.assertEqual(inserted["selected_option_id"], ["option-1"])
+        self.assertEqual(result["attempt_number"], 3)
+
+    def test_create_revision_clones_all_node_progress(self) -> None:
+        self.database["learning_sessions"].find_one.return_value = {
+            "_id": "s1",
+            "status": "completed",
+        }
+        self.database["revision_sessions"].count_documents.return_value = 0
+        self.database["concept_nodes"].find.return_value = [
+            {"_id": "n1", "title": "One", "sequence_index": 0},
+            {"_id": "n2", "title": "Two", "sequence_index": 1},
+        ]
+        revision = self.repository.create_revision_session(
+            "s1",
+            "full_review",
+        )
+        inserts = self.database["revision_node_progress"].insert_many.call_args.args[0]
+        self.assertEqual(len(inserts), 2)
+        self.assertEqual(revision["revision_number"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+
