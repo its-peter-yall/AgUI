@@ -21,10 +21,42 @@ from __future__ import annotations
 
 import unittest
 
+from types import SimpleNamespace
+
 from server.database.migrate_to_mongo import (
     MIGRATION_TABLES,
+    bulk_upsert,
+    iter_batches,
     row_to_document,
 )
+
+
+class FakeCollection:
+    def __init__(self) -> None:
+        self.documents: dict[object, dict] = {}
+        self.ordered_values: list[bool] = []
+
+    def bulk_write(self, operations, ordered=True):
+        self.ordered_values.append(ordered)
+        matched = 0
+        upserted = 0
+        modified = 0
+        for operation in operations:
+            document = dict(operation._doc)
+            identifier = document["_id"]
+            if identifier in self.documents:
+                matched += 1
+                if self.documents[identifier] != document:
+                    modified += 1
+                self.documents[identifier] = document
+            else:
+                upserted += 1
+                self.documents[identifier] = document
+        return SimpleNamespace(
+            matched_count=matched,
+            upserted_count=upserted,
+            modified_count=modified,
+        )
 
 
 class MigrationMappingTests(unittest.TestCase):
@@ -83,6 +115,26 @@ class MigrationMappingTests(unittest.TestCase):
         )
         self.assertEqual(document["key_terms"], "not-json")
         self.assertEqual(len(warnings), 1)
+
+
+class MigrationBatchTests(unittest.TestCase):
+    def test_bulk_upsert_is_unordered_and_retry_safe(self) -> None:
+        collection = FakeCollection()
+        documents = [
+            {"_id": "s1", "query": "one"},
+            {"_id": "s2", "query": "two"},
+        ]
+        first = bulk_upsert(collection, documents)
+        second = bulk_upsert(collection, documents)
+
+        self.assertEqual(len(collection.documents), 2)
+        self.assertEqual(first.upserted_count, 2)
+        self.assertEqual(second.matched_count, 2)
+        self.assertFalse(collection.ordered_values[0])
+
+    def test_iter_batches_uses_500_row_limit(self) -> None:
+        batches = list(iter_batches(range(1001)))
+        self.assertEqual([len(batch) for batch in batches], [500, 500, 1])
 
 
 if __name__ == "__main__":
