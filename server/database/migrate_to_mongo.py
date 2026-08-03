@@ -31,7 +31,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from fastapi.concurrency import run_in_threadpool
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pymongo import ReplaceOne
+
+from server.database.checkpoint_migration import copy_checkpoints
 
 MIGRATION_BATCH_SIZE = 500
 MIGRATION_TABLES = (
@@ -214,4 +218,79 @@ def migrate_table(
         matched=matched,
         upserted=upserted,
         modified=modified,
+    )
+
+
+@dataclass(frozen=True)
+class MigrationSummary:
+    collections: dict[str, CollectionMigrationSummary]
+    checkpoints: int
+    checkpoint_writes: int
+    warnings: list[str] = field(default_factory=list)
+
+
+def migrate_application_data(
+    sqlite_path: Path,
+    database: Any,
+) -> tuple[dict[str, CollectionMigrationSummary], list[str]]:
+    warnings: list[str] = []
+    summaries: dict[str, CollectionMigrationSummary] = {}
+    connection = sqlite3.connect(sqlite_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        for table in MIGRATION_TABLES:
+            summaries[table] = migrate_table(
+                connection,
+                database[table],
+                table,
+                warnings,
+            )
+    finally:
+        connection.close()
+    progress = database["progress_events"].find_one(
+        sort=[("_id", -1)]
+    )
+    maximum = int(progress["_id"]) if progress is not None else 0
+    database["storage_counters"].update_one(
+        {"_id": "progress_events"},
+        {"$max": {"value": maximum}},
+        upsert=True,
+    )
+    return summaries, warnings
+
+
+async def migrate_to_mongo(
+    *,
+    sqlite_path: Path,
+    checkpoint_path: Path,
+    database: Any,
+    mongo_checkpointer: Any,
+    app_settings: Any,
+    provider_settings: dict[str, Any],
+    web_search_settings: dict[str, Any],
+    sqlite_saver_factory: Any = AsyncSqliteSaver.from_conn_string,
+) -> MigrationSummary:
+    summaries, warnings = await run_in_threadpool(
+        migrate_application_data,
+        sqlite_path,
+        database,
+    )
+    async with sqlite_saver_factory(str(checkpoint_path)) as source:
+        checkpoint_summary = await copy_checkpoints(
+            source,
+            mongo_checkpointer,
+        )
+    await run_in_threadpool(
+        app_settings.put_provider_settings,
+        provider_settings,
+    )
+    await run_in_threadpool(
+        app_settings.put_web_search_settings,
+        web_search_settings,
+    )
+    return MigrationSummary(
+        collections=summaries,
+        checkpoints=checkpoint_summary.checkpoints,
+        checkpoint_writes=checkpoint_summary.writes,
+        warnings=warnings,
     )
