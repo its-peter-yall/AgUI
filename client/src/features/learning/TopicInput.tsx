@@ -143,7 +143,7 @@ export function TopicInput({
   const settings = getProviderSettings();
   const activeConfig = settings.providers[settings.activeProvider];
   const hasApiKey = Boolean(activeConfig.apiKey);
-  const agentsReady = areAgentModelsConfigured(activeConfig);
+  const agentsReady = areAgentModelsConfigured(settings);
   const canStart = hasApiKey && agentsReady;
 
   const handleSubmit = (e: FormEvent) => {

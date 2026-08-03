@@ -159,9 +159,7 @@ export function LearningPage() {
 	const resumeMutation = useMutation({
 		mutationFn: async () => {
 			const providerSettings = getProviderSettings();
-			const activeCfg =
-				providerSettings.providers[providerSettings.activeProvider];
-			if (!areAgentModelsConfigured(activeCfg)) {
+			if (!areAgentModelsConfigured(providerSettings)) {
 				throw new Error(
 					"Set Researcher, Planner, Generator, and Quizzer models in Settings before resuming.",
 				);
@@ -471,10 +469,7 @@ export function LearningPage() {
 								isResuming={resumeMutation.isPending}
 								isDeleting={deleteMutation.isPending}
 								canResumeAgents={(() => {
-									const s = getProviderSettings();
-									return areAgentModelsConfigured(
-										s.providers[s.activeProvider],
-									);
+									return areAgentModelsConfigured(getProviderSettings());
 								})()}
 							/>
 							{controlError && (

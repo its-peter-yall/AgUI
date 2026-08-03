@@ -53,17 +53,17 @@ vi.mock('@/lib/providerSettings', () => ({
   hasWebSearchCapability: () => api.hasWebSearchCapability(),
   getProviderSettings: () => ({
     activeProvider: 'openrouter',
+    agentModels: {
+      researcher: { modelId: 'r' },
+      planner: { modelId: 'p' },
+      generator: { modelId: 'g' },
+      quizzer: { modelId: 'q' },
+    },
     providers: {
       openrouter: {
         apiKey: 'k',
         model: 'm',
         modelTitle: 'M',
-        agentModels: {
-          researcher: { modelId: 'r' },
-          planner: { modelId: 'p' },
-          generator: { modelId: 'g' },
-          quizzer: { modelId: 'q' },
-        },
       },
       generalcompute: { apiKey: '', model: '', modelTitle: '' },
     },

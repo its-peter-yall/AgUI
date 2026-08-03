@@ -42,19 +42,19 @@ vi.mock('@/lib/learningApi', () => ({
 vi.mock('@/lib/providerSettings', () => ({
   getProviderSettings: () => ({
     activeProvider: 'openrouter',
+    agentModels: mocks.agentsReady
+      ? {
+          researcher: { modelId: 'r' },
+          planner: { modelId: 'p' },
+          generator: { modelId: 'g' },
+          quizzer: { modelId: 'q' },
+        }
+      : undefined,
     providers: {
       openrouter: {
         apiKey: 'llm-key',
         model: 'test/model',
         modelTitle: 'Test',
-        agentModels: mocks.agentsReady
-          ? {
-              researcher: { modelId: 'r' },
-              planner: { modelId: 'p' },
-              generator: { modelId: 'g' },
-              quizzer: { modelId: 'q' },
-            }
-          : undefined,
       },
       generalcompute: { apiKey: '', model: '', modelTitle: '' },
     },

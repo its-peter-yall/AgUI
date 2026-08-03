@@ -163,14 +163,11 @@ export function ConceptCard({
 	const queryClient = useQueryClient();
 
 	const agentSettings = getProviderSettings();
-	const agentsReady = areAgentModelsConfigured(
-		agentSettings.providers[agentSettings.activeProvider],
-	);
+	const agentsReady = areAgentModelsConfigured(agentSettings);
 
 	const startStreamingRegen = async () => {
 		const settings = getProviderSettings();
-		const cfg = settings.providers[settings.activeProvider];
-		if (!areAgentModelsConfigured(cfg)) {
+		if (!areAgentModelsConfigured(settings)) {
 			setLocalError(
 				"Set Researcher, Planner, Generator, and Quizzer models in Settings before regenerating.",
 			);

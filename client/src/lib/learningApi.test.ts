@@ -123,30 +123,30 @@ vi.mock('axios', () => ({
 vi.mock('./providerSettings', () => ({
   getProviderSettings: () => ({
     activeProvider: 'openrouter',
+    agentModels: {
+      researcher: {
+        modelId: 'r-model',
+        modelProvider: 'openrouter',
+      },
+      planner: {
+        modelId: 'p-model',
+        modelProvider: 'openrouter',
+      },
+      generator: {
+        modelId: 'g-model',
+        modelProvider: 'openrouter',
+      },
+      quizzer: {
+        modelId: 'q-model',
+        modelProvider: 'openrouter',
+      },
+    },
     providers: {
       openrouter: {
         apiKey: 'llm-secret',
         model: 'test/model',
         modelTitle: 'Test',
         thinking: { enabled: false, effort: 'high' },
-        agentModels: {
-          researcher: {
-            modelId: 'r-model',
-            modelProvider: 'openrouter',
-          },
-          planner: {
-            modelId: 'p-model',
-            modelProvider: 'openrouter',
-          },
-          generator: {
-            modelId: 'g-model',
-            modelProvider: 'openrouter',
-          },
-          quizzer: {
-            modelId: 'q-model',
-            modelProvider: 'openrouter',
-          },
-        },
       },
       generalcompute: { apiKey: '', model: '', modelTitle: '' },
     },

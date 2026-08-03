@@ -60,12 +60,13 @@ export interface ProviderConfig {
 	chatModelProvider?: AIProvider;
 	maxCompletionTokens?: number;
 	thinking?: ThinkingConfig;
-	agentModels?: Partial<Record<AgentRole, AgentModelSelection>>;
 }
 
 export interface AIProviderSettings {
 	activeProvider: AIProvider;
 	providers: Record<AIProvider, ProviderConfig>;
+	/** Cross-provider agent role models (not tied to activeProvider) */
+	agentModels?: Partial<Record<AgentRole, AgentModelSelection>>;
 }
 
 const EMPTY_CONFIG: ProviderConfig = {
@@ -137,8 +138,13 @@ function parseAgentModels(
 	return Object.keys(out).length > 0 ? out : undefined;
 }
 
-export function areAgentModelsConfigured(config: ProviderConfig): boolean {
-	const map = config.agentModels;
+export function areAgentModelsConfigured(
+	settingsOrMap?:
+		| AIProviderSettings
+		| Partial<Record<AgentRole, AgentModelSelection>>
+		| null,
+): boolean {
+	const map = resolveAgentModelsMap(settingsOrMap);
 	if (!map) return false;
 	return AGENT_ROLES.every((role) => {
 		const id = map[role]?.modelId;
@@ -146,22 +152,33 @@ export function areAgentModelsConfigured(config: ProviderConfig): boolean {
 	});
 }
 
+function resolveAgentModelsMap(
+	settingsOrMap?:
+		| AIProviderSettings
+		| Partial<Record<AgentRole, AgentModelSelection>>
+		| null,
+): Partial<Record<AgentRole, AgentModelSelection>> | undefined {
+	if (!settingsOrMap) return undefined;
+	if ("providers" in settingsOrMap && "activeProvider" in settingsOrMap) {
+		return settingsOrMap.agentModels;
+	}
+	return settingsOrMap as Partial<Record<AgentRole, AgentModelSelection>>;
+}
+
 export function getAgentModelSelection(
-	config: ProviderConfig,
+	settings: AIProviderSettings,
 	role: AgentRole,
 ): AgentModelSelection | undefined {
-	return config.agentModels?.[role];
+	return settings.agentModels?.[role];
 }
 
 export function setAgentModelSelection(
-	provider: AIProvider,
 	role: AgentRole,
 	selection: AgentModelSelection,
 ): void {
 	const settings = getProviderSettings();
-	const current = settings.providers[provider];
 	const nextModels = {
-		...(current.agentModels ?? {}),
+		...(settings.agentModels ?? {}),
 		[role]: {
 			modelId: selection.modelId,
 			modelTitle: selection.modelTitle,
@@ -174,7 +191,35 @@ export function setAgentModelSelection(
 				: undefined,
 		},
 	};
-	setProviderConfig(provider, { agentModels: nextModels });
+	setProviderSettings({ agentModels: nextModels });
+}
+
+/**
+ * Prefer top-level agentModels; migrate legacy per-provider copies.
+ */
+function resolveStoredAgentModels(
+	parsed: Partial<AIProviderSettings> & {
+		providers?: Partial<Record<AIProvider, ProviderConfig & {
+			agentModels?: unknown;
+		}>>;
+	},
+): Partial<Record<AgentRole, AgentModelSelection>> | undefined {
+	const top = parseAgentModels(parsed?.agentModels);
+	if (top) return top;
+	const fromOr = parseAgentModels(
+		parsed?.providers?.openrouter &&
+			"agentModels" in parsed.providers.openrouter
+			? (parsed.providers.openrouter as { agentModels?: unknown }).agentModels
+			: undefined,
+	);
+	if (fromOr) return fromOr;
+	return parseAgentModels(
+		parsed?.providers?.generalcompute &&
+			"agentModels" in parsed.providers.generalcompute
+			? (parsed.providers.generalcompute as { agentModels?: unknown })
+					.agentModels
+			: undefined,
+	);
 }
 
 /**
@@ -184,12 +229,17 @@ export function getProviderSettings(): AIProviderSettings {
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (raw) {
-			const parsed = JSON.parse(raw) as Partial<AIProviderSettings>;
+			const parsed = JSON.parse(raw) as Partial<AIProviderSettings> & {
+				providers?: Partial<
+					Record<AIProvider, ProviderConfig & { agentModels?: unknown }>
+				>;
+			};
 			return {
 				activeProvider:
 					parsed?.activeProvider === "generalcompute"
 						? "generalcompute"
 						: "openrouter",
+				agentModels: resolveStoredAgentModels(parsed),
 				providers: {
 					openrouter: {
 						apiKey:
@@ -226,9 +276,6 @@ export function getProviderSettings(): AIProviderSettings {
 							enabled: false,
 							effort: "high",
 						},
-						agentModels: parseAgentModels(
-							parsed?.providers?.openrouter?.agentModels,
-						),
 					},
 					generalcompute: {
 						apiKey:
@@ -267,9 +314,6 @@ export function getProviderSettings(): AIProviderSettings {
 							enabled: false,
 							effort: "high",
 						},
-						agentModels: parseAgentModels(
-							parsed?.providers?.generalcompute?.agentModels,
-						),
 					},
 				},
 			};
@@ -338,6 +382,10 @@ export function setProviderSettings(
 			partial.activeProvider !== undefined
 				? partial.activeProvider
 				: current.activeProvider,
+		agentModels:
+			partial.agentModels !== undefined
+				? partial.agentModels
+				: current.agentModels,
 		providers: {
 			openrouter: partial.providers?.openrouter
 				? { ...current.providers.openrouter, ...partial.providers.openrouter }

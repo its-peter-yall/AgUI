@@ -24,52 +24,54 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildAgentModelHeaders } from './agentModelHeaders';
-import type { ProviderConfig, AIProviderSettings } from './providerSettings';
+import type { AIProviderSettings } from './providerSettings';
 
-const baseConfig = (partial: Partial<ProviderConfig> = {}): ProviderConfig => ({
-  apiKey: 'or-key',
-  model: 'main/model',
-  modelTitle: 'Main',
-  thinking: { enabled: true, effort: 'high' },
-  agentModels: {
-    researcher: {
-      modelId: 'r-model',
-      modelProvider: 'openrouter',
-      thinking: { enabled: false, effort: 'low' },
-    },
-    planner: {
-      modelId: 'p-model',
-      modelProvider: 'generalcompute',
-      thinking: { enabled: false, effort: 'high' },
-    },
-    generator: {
-      modelId: 'g-model',
-      modelProvider: 'openrouter',
-      thinking: { enabled: true, effort: 'medium' },
-    },
-    quizzer: {
-      modelId: 'q-model',
-      modelProvider: 'openrouter',
-    },
+const fullAgentModels = {
+  researcher: {
+    modelId: 'r-model',
+    modelProvider: 'openrouter' as const,
+    thinking: { enabled: false as const, effort: 'low' as const },
   },
-  ...partial,
-});
+  planner: {
+    modelId: 'p-model',
+    modelProvider: 'generalcompute' as const,
+    thinking: { enabled: false as const, effort: 'high' as const },
+  },
+  generator: {
+    modelId: 'g-model',
+    modelProvider: 'openrouter' as const,
+    thinking: { enabled: true as const, effort: 'medium' as const },
+  },
+  quizzer: {
+    modelId: 'q-model',
+    modelProvider: 'openrouter' as const,
+  },
+};
 
-const settings = (active: ProviderConfig): AIProviderSettings => ({
+const baseSettings = (
+  partial: Partial<AIProviderSettings> = {},
+): AIProviderSettings => ({
   activeProvider: 'openrouter',
+  agentModels: fullAgentModels,
   providers: {
-    openrouter: active,
+    openrouter: {
+      apiKey: 'or-key',
+      model: 'main/model',
+      modelTitle: 'Main',
+      thinking: { enabled: true, effort: 'high' },
+    },
     generalcompute: {
       apiKey: 'gc-key',
       model: '',
       modelTitle: '',
     },
   },
+  ...partial,
 });
 
 describe('buildAgentModelHeaders', () => {
   it('emits model/provider/thinking headers for all four roles', () => {
-    const h = buildAgentModelHeaders(settings(baseConfig()));
+    const h = buildAgentModelHeaders(baseSettings());
     expect(h['X-Researcher-Model']).toBe('r-model');
     expect(h['X-Researcher-Provider']).toBe('openrouter');
     expect(h['X-Planner-Model']).toBe('p-model');
@@ -82,7 +84,7 @@ describe('buildAgentModelHeaders', () => {
   });
 
   it('includes both provider keys when roles span providers', () => {
-    const h = buildAgentModelHeaders(settings(baseConfig()));
+    const h = buildAgentModelHeaders(baseSettings());
     expect(h['X-OpenRouter-Key']).toBe('or-key');
     expect(h['X-GeneralCompute-Key']).toBe('gc-key');
   });
@@ -90,7 +92,9 @@ describe('buildAgentModelHeaders', () => {
   it('throws when agent models incomplete', () => {
     expect(() =>
       buildAgentModelHeaders(
-        settings(baseConfig({ agentModels: { researcher: { modelId: 'r' } } })),
+        baseSettings({
+          agentModels: { researcher: { modelId: 'r' } },
+        }),
       ),
     ).toThrow(/Researcher, Planner, Generator, and Quizzer/i);
   });

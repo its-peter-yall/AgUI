@@ -53,7 +53,7 @@ export function buildAgentModelHeaders(
   settings: AIProviderSettings,
 ): Record<string, string> {
   const active = settings.providers[settings.activeProvider];
-  if (!areAgentModelsConfigured(active)) {
+  if (!areAgentModelsConfigured(settings)) {
     throw new Error(
       'Set Researcher, Planner, Generator, and Quizzer models in Settings before generating.',
     );
@@ -73,7 +73,7 @@ export function buildAgentModelHeaders(
   if (gcKey) headers['X-GeneralCompute-Key'] = gcKey;
 
   for (const role of AGENT_ROLES) {
-    const sel = active.agentModels![role]!;
+    const sel = settings.agentModels![role]!;
     const provider: AIProvider =
       sel.modelProvider ?? settings.activeProvider;
     headers[agentModelHeaderName(role, 'Model')] = sel.modelId.trim();

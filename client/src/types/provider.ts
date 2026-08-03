@@ -58,7 +58,7 @@ export const AGENT_ROLES: readonly AgentRole[] = [
   'quizzer',
 ] as const;
 
-/** Per-role model pick stored under ProviderConfig.agentModels */
+/** Per-role model pick (top-level AIProviderSettings.agentModels) */
 export interface AgentModelSelection {
   modelId: string;
   modelTitle?: string;

@@ -5,7 +5,7 @@
  * ============================================================================
  *
  * PURPOSE:
- *    Tests Agent Models panel role labels and save wiring.
+ *    Tests Agent Models panel role labels, save wiring, and selection display.
  *
  * ROLE IN PROJECT:
  *    Guards four-role picker UI and setAgentModelSelection integration.
@@ -15,7 +15,7 @@
  *
  * DEPENDENCIES:
  *    - External: @testing-library/react, @tanstack/react-query, vitest
- *    - Internal: AgentModelsPanel
+ *    - Internal: AgentModelsPanel, providerSettings
  *
  * USAGE:
  *    npm run test -- --run src/features/settings/AgentModelsPanel.test.tsx
@@ -26,38 +26,23 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-const setAgentModelSelection = vi.fn();
-
-vi.mock('@/lib/providerSettings', () => ({
-  getProviderSettings: () => ({
-    activeProvider: 'openrouter',
-    providers: {
-      openrouter: {
-        apiKey: 'or-key',
-        model: 'main',
-        modelTitle: 'Main',
-        agentModels: {},
-      },
-      generalcompute: { apiKey: 'gc-key', model: '', modelTitle: '' },
-    },
-  }),
-  setAgentModelSelection: (...args: unknown[]) =>
-    setAgentModelSelection(...args),
-  setProviderConfig: vi.fn(),
-}));
-
 vi.mock('./ModelPicker', () => ({
   ModelPicker: ({
+    activeModel,
     onSelect,
   }: {
+    activeModel: string;
     onSelect: (p: string, id: string, title: string) => void;
   }) => (
-    <button
-      type="button"
-      onClick={() => onSelect('openrouter', 'test/model', 'Test Model')}
-    >
-      pick-model
-    </button>
+    <div>
+      <span data-testid="active-model">{activeModel || 'none'}</span>
+      <button
+        type="button"
+        onClick={() => onSelect('openrouter', 'test/model', 'Test Model')}
+      >
+        pick-model
+      </button>
+    </div>
   ),
 }));
 
@@ -66,6 +51,10 @@ vi.mock('./ThinkingModeToggle', () => ({
 }));
 
 import { AgentModelsPanel } from './AgentModelsPanel';
+import {
+  getProviderSettings,
+  setProviderConfig,
+} from '@/lib/providerSettings';
 
 function renderPanel() {
   const qc = new QueryClient({
@@ -80,7 +69,12 @@ function renderPanel() {
 
 describe('AgentModelsPanel', () => {
   beforeEach(() => {
-    setAgentModelSelection.mockClear();
+    localStorage.clear();
+    setProviderConfig('openrouter', {
+      apiKey: 'or-key',
+      model: 'main',
+      modelTitle: 'Main',
+    });
   });
 
   it('renders four role labels', () => {
@@ -91,12 +85,16 @@ describe('AgentModelsPanel', () => {
     expect(screen.getByText('Quizzer')).toBeInTheDocument();
   });
 
-  it('saves selection via setAgentModelSelection on active provider', () => {
+  it('persists selection and shows it in the UI', () => {
     renderPanel();
     fireEvent.click(screen.getAllByText('pick-model')[0]);
-    expect(setAgentModelSelection).toHaveBeenCalledWith(
-      'openrouter',
-      'researcher',
+    expect(screen.getByText('Selected:')).toBeInTheDocument();
+    expect(screen.getByText('Test Model')).toBeInTheDocument();
+    expect(screen.getAllByTestId('active-model')[0]).toHaveTextContent(
+      'test/model',
+    );
+    const stored = getProviderSettings();
+    expect(stored.agentModels?.researcher).toEqual(
       expect.objectContaining({
         modelId: 'test/model',
         modelTitle: 'Test Model',

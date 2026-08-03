@@ -60,6 +60,8 @@ export interface ModelPickerProps {
 		maxCompletionTokens?: number,
 	) => void;
 	disabled?: boolean;
+	/** Unique prefix when multiple pickers share a page (a11y ids) */
+	idPrefix?: string;
 }
 
 function useModelList(provider: AIProvider, apiKey: string) {
@@ -79,13 +81,14 @@ export function ModelPicker({
 	activeModel,
 	onSelect,
 	disabled = false,
+	idPrefix = "model-picker",
 }: ModelPickerProps) {
 	const [search, setSearch] = useState("");
 	const [isOpen, setIsOpen] = useState(false);
 	const [activeIndex, setActiveIndex] = useState(-1);
 
 	const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
-	const listboxId = "model-picker-listbox";
+	const listboxId = `${idPrefix}-listbox`;
 
 	// Concurrently fetch models for configured providers
 	const {
@@ -234,7 +237,7 @@ export function ModelPicker({
 	}, [hasAnyKey, isLoading, selectedModel, activeModel, activeProvider]);
 
 	return (
-		<div className="relative w-full">
+		<div className={cn("relative w-full", isOpen && "z-[200]")}>
 			<label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
 				Select Model
 			</label>
@@ -246,7 +249,7 @@ export function ModelPicker({
 				disabled={disabled || !hasAnyKey}
 				className={cn(
 					"w-full flex items-center justify-between rounded-lg px-4 py-3",
-					"bg-muted border border-border text-foreground backdrop-blur-sm",
+					"bg-muted border border-border text-foreground",
 					"text-sm text-left transition-all duration-200",
 					"hover:border-border/80 focus:outline-none focus:ring-2 focus:ring-primary/20",
 					"disabled:opacity-50 disabled:cursor-not-allowed shadow-inner",
@@ -263,7 +266,7 @@ export function ModelPicker({
 				/>
 			</button>
 
-			{/* Dropdown Container */}
+			{/* Dropdown Container — solid bg, high z so sibling cards never show through */}
 			<AnimatePresence>
 				{isOpen && !disabled && hasAnyKey && (
 					<motion.div
@@ -272,18 +275,21 @@ export function ModelPicker({
 						exit={{ opacity: 0, y: -8 }}
 						transition={{ duration: 0.15 }}
 						className={cn(
-							"absolute z-50 mt-1 w-full rounded-lg overflow-hidden",
-							"bg-popover border border-border text-popover-foreground backdrop-blur-md shadow-2xl",
+							"absolute left-0 right-0 z-[200] mt-1 w-full rounded-lg overflow-hidden",
+							"border border-border shadow-2xl",
+							"bg-card text-card-foreground",
 						)}
 						role="listbox"
 						id={listboxId}
 						aria-activedescendant={
-							activeIndex >= 0 ? `model-option-${activeIndex}` : undefined
+							activeIndex >= 0
+								? `${idPrefix}-option-${activeIndex}`
+								: undefined
 						}
 						onKeyDown={handleKeyDown}
 					>
 						{/* Search Box */}
-						<div className="p-2 border-b border-border">
+						<div className="p-2 border-b border-border bg-card">
 							<div className="relative">
 								<Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
 								<input
@@ -303,7 +309,7 @@ export function ModelPicker({
 						</div>
 
 						{/* Models Scrollable List */}
-						<div className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
+						<div className="max-h-72 overflow-y-auto p-1 scrollbar-thin bg-card">
 							{isLoading ? (
 								<div className="px-3 py-6 text-sm text-muted-foreground text-center">
 									<div className="h-5 w-5 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin mx-auto mb-2" />
@@ -337,8 +343,8 @@ export function ModelPicker({
 											ref={(el) => {
 												optionRefs.current[filteredModels.indexOf(model)] = el;
 											}}
-											id={`model-option-${filteredModels.indexOf(model)}`}
-											key={`${model.provider}-${model.id}`}
+										id={`${idPrefix}-option-${filteredModels.indexOf(model)}`}
+										key={`${model.provider}-${model.id}`}
 											type="button"
 											onClick={() => handleSelect(model)}
 											className={cn(

@@ -63,8 +63,6 @@ const ROLE_META: Record<AgentRole, { label: string; help: string }> = {
 
 export function AgentModelsPanel() {
   const [settings, setSettings] = useState(() => getProviderSettings());
-  const activeProvider = settings.activeProvider;
-  const activeConfig = settings.providers[activeProvider];
 
   const { data: orModels } = useQuery<ProviderModel[], ProviderApiError>({
     queryKey: [
@@ -86,8 +84,8 @@ export function AgentModelsPanel() {
   const handleSelect = useCallback(
     (role: AgentRole) =>
       (provider: AIProvider, modelId: string, modelTitle: string) => {
-        const prev = activeConfig.agentModels?.[role];
-        setAgentModelSelection(activeProvider, role, {
+        const prev = getProviderSettings().agentModels?.[role];
+        setAgentModelSelection(role, {
           modelId,
           modelTitle,
           modelProvider: provider,
@@ -95,20 +93,20 @@ export function AgentModelsPanel() {
         });
         refresh();
       },
-    [activeConfig.agentModels, activeProvider, refresh],
+    [refresh],
   );
 
   const handleThinking = useCallback(
     (role: AgentRole) => (enabled: boolean, effort: ThinkingEffort) => {
-      const prev = activeConfig.agentModels?.[role];
+      const prev = getProviderSettings().agentModels?.[role];
       if (!prev?.modelId) return;
-      setAgentModelSelection(activeProvider, role, {
+      setAgentModelSelection(role, {
         ...prev,
         thinking: { enabled, effort },
       });
       refresh();
     },
-    [activeConfig.agentModels, activeProvider, refresh],
+    [refresh],
   );
 
   return (
@@ -118,8 +116,9 @@ export function AgentModelsPanel() {
         may use OpenRouter or General Compute independently.
       </p>
       {AGENT_ROLES.map((role) => {
-        const sel = activeConfig.agentModels?.[role];
-        const roleProvider = sel?.modelProvider ?? activeProvider;
+        const sel = settings.agentModels?.[role];
+        const roleProvider =
+          sel?.modelProvider ?? settings.activeProvider;
         const supportsThinking =
           roleProvider === 'openrouter' &&
           !!sel?.modelId &&
@@ -144,6 +143,7 @@ export function AgentModelsPanel() {
               activeProvider={roleProvider}
               activeModel={sel?.modelId ?? ''}
               onSelect={handleSelect(role)}
+              idPrefix={`agent-${role}`}
             />
             {sel?.modelTitle && (
               <p className="text-xs text-muted-foreground">
