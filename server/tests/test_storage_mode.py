@@ -53,6 +53,7 @@ def make_context(
     mongo_bundle_factory=None,
     mongo_indexer=None,
     sqlite_repositories=None,
+    checkpointer_controller=None,
 ) -> StorageContext:
     kwargs = {
         "deployment_mode": DeploymentMode.LOCAL,
@@ -65,7 +66,10 @@ def make_context(
         kwargs["mongo_bundle_factory"] = mongo_bundle_factory
     if mongo_indexer is not None:
         kwargs["mongo_indexer"] = mongo_indexer
-    return StorageContext(**kwargs)
+    context = StorageContext(**kwargs)
+    if checkpointer_controller is not None:
+        context.set_checkpointer_controller(checkpointer_controller)
+    return context
 
 
 class StorageModeConfigTests(unittest.TestCase):
@@ -205,6 +209,44 @@ class StorageContextTests(unittest.TestCase):
         self.connection.client.close.assert_called_once_with()
         self.assertEqual(context.active_backend, StorageBackend.SQLITE)
         self.assertIs(context.learning, context.sqlite_repositories.learning)
+
+    def test_storage_connect_activates_prepared_saver_before_old_close(
+        self,
+    ) -> None:
+        controller = MagicMock()
+        mongo_saver = MagicMock()
+        controller.prepare_mongo.return_value = mongo_saver
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+            checkpointer_controller=controller,
+        )
+
+        context.connect("mongodb://host", "atlas")
+
+        controller.prepare_mongo.assert_called_once_with(
+            self.connection.client,
+            "atlas",
+        )
+        controller.activate.assert_called_once_with(mongo_saver)
+
+    def test_storage_disconnect_restores_sqlite_graph(self) -> None:
+        controller = MagicMock()
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+            checkpointer_controller=controller,
+        )
+        context.connect("mongodb://host", "atlas")
+        controller.reset_mock()
+        context.disconnect()
+        controller.activate_sqlite.assert_called_once_with()
 
 
 if __name__ == "__main__":

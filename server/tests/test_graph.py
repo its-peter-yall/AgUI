@@ -23,7 +23,9 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from server.graph.build import build_graph, get_graph
+from unittest.mock import MagicMock, patch
+
+from server.graph.build import build_graph, get_graph, replace_graph
 
 
 class StagedStateTests(unittest.TestCase):
@@ -101,6 +103,27 @@ class GraphBuildTests(unittest.IsolatedAsyncioTestCase):
         graph_two = get_graph(app_state)
 
         self.assertIs(graph_one, graph_two)
+
+    def test_replace_graph_publishes_new_graph_for_get_graph(self) -> None:
+        app_state = SimpleNamespace()
+        old_graph = object()
+        new_graph = object()
+        new_saver = MagicMock()
+        app_state.course_graph = old_graph
+        app_state.checkpointer = MagicMock()
+
+        with patch(
+            "server.graph.build.build_graph",
+            return_value=new_graph,
+        ) as builder:
+            result = replace_graph(app_state, new_saver)
+
+        builder.assert_called_once_with(checkpointer=new_saver)
+        self.assertIs(result, new_graph)
+        self.assertIs(app_state.course_graph, new_graph)
+        self.assertIs(app_state.checkpointer, new_saver)
+        self.assertIs(get_graph(app_state), new_graph)
+        self.assertIsNot(get_graph(app_state), old_graph)
 
 
 if __name__ == "__main__":

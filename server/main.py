@@ -35,6 +35,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from server.database.checkpointer import CheckpointerController
 from server.database.storage_mode import DeploymentMode
 from server.database.storage_registry import (
     initialize_sqlite_storage,
@@ -74,10 +75,13 @@ async def lifespan(app: FastAPI):
     async with AsyncSqliteSaver.from_conn_string(
         str(CHECKPOINT_DB_PATH),
     ) as checkpointer:
-        app.state.checkpointer = checkpointer
-        app.state.course_graph = build_graph(
-            checkpointer=checkpointer,
+        controller = CheckpointerController(
+            app_state=app.state,
+            sqlite_saver=checkpointer,
+            graph_builder=lambda saver: build_graph(checkpointer=saver),
         )
+        controller.activate_sqlite()
+        storage_context.set_checkpointer_controller(controller)
         runtime = GenerationRuntime(app_state=app.state)
         app.state.generation_runtime = runtime
         try:
@@ -86,6 +90,7 @@ async def lifespan(app: FastAPI):
             await runtime.shutdown()
             if storage_context.deployment_mode == DeploymentMode.LOCAL:
                 storage_context.disconnect()
+            storage_context.set_checkpointer_controller(None)
 
     logger.info("Shutting down A2UI Backend...")
 

@@ -101,3 +101,12 @@ def get_graph(app_state: Any) -> Any:
         graph = build_graph(checkpointer=checkpointer)
         setattr(app_state, "course_graph", graph)
     return graph
+
+
+def replace_graph(app_state: Any, checkpointer: Any) -> Any:
+    """Compile and publish graph bound to selected checkpointer."""
+
+    graph = build_graph(checkpointer=checkpointer)
+    app_state.checkpointer = checkpointer
+    app_state.course_graph = graph
+    return graph

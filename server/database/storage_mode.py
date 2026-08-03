@@ -98,6 +98,7 @@ class StorageContext:
         self._mongo_indexer = mongo_indexer
         self._mongo: Optional[MongoConnection] = None
         self._lock = threading.RLock()
+        self._checkpointer_controller: Any = None
         bundle = (
             sqlite_repositories
             if sqlite_repositories is not None
@@ -105,6 +106,14 @@ class StorageContext:
         )
         self._sqlite_repositories = bundle
         self._repositories = bundle
+
+    def set_checkpointer_controller(self, controller: Any) -> None:
+        """Bind lifespan-owned checkpointer controller for graph swaps."""
+        self._checkpointer_controller = controller
+
+    @property
+    def checkpointer_controller(self) -> Any:
+        return self._checkpointer_controller
 
     @property
     def connected(self) -> bool:
@@ -148,23 +157,46 @@ class StorageContext:
 
     def connect(self, uri: str, db_name: str) -> None:
         candidate = self._mongo_factory(uri, db_name)
+        controller = self._checkpointer_controller
+        mongo_saver = None
         try:
             self._mongo_indexer(candidate.database)
             repositories = self._mongo_bundle_factory(candidate.database)
+            if controller is not None:
+                mongo_saver = controller.prepare_mongo(
+                    candidate.client,
+                    db_name,
+                )
         except Exception:
             candidate.client.close()
             raise
+
         with self._lock:
             previous = self._mongo
+            previous_repos = self._repositories
+            previous_backend = self.active_backend
             self._mongo = candidate
             self._repositories = repositories
             self.active_backend = StorageBackend.MONGO
+            try:
+                if controller is not None and mongo_saver is not None:
+                    controller.activate(mongo_saver)
+            except Exception:
+                self._mongo = previous
+                self._repositories = previous_repos
+                self.active_backend = previous_backend
+                candidate.client.close()
+                raise
+
         if previous is not None:
             previous.client.close()
 
     def disconnect(self) -> None:
         with self._lock:
             previous = self._mongo
+            controller = self._checkpointer_controller
+            if controller is not None:
+                controller.activate_sqlite()
             self._mongo = None
             self.active_backend = StorageBackend.SQLITE
             self._repositories = self._sqlite_repositories
