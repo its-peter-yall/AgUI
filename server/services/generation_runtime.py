@@ -29,10 +29,12 @@ from typing import Any, Awaitable, Callable, Optional, Set
 from server.database.generation_jobs import (
     GenerationJobNotFound,
     InvalidGenerationTransition,
-    generation_job_store,
 )
-from server.database.progress_events import progress_event_store
-from server.database.research_store import research_store
+from server.database.storage_registry import (
+    generation_job_repository as generation_job_store,
+    progress_event_repository as progress_event_store,
+    research_repository as research_store,
+)
 from server.graph.runner import GenerationAlreadyRunning, run_generation_job
 from server.schemas.generation import (
     GenerateCourseAcceptedResponse,
@@ -262,7 +264,9 @@ class GenerationRuntime:
         updated = self.job_store.prepare_resume(session_id)
         # M9: emit monotonic progress event so equal-ID polls cannot undo resume.
         try:
-            from server.database.progress_events import progress_event_store
+            from server.database.storage_registry import (
+                progress_event_repository as progress_event_store,
+            )
             from server.schemas.progress import (
                 ProgressEventType,
                 StageChangedPayload,

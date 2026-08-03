@@ -30,8 +30,10 @@ from openai import AsyncOpenAI
 
 from server.agents.generator import GeneratedContent, generator_agent
 from server.agents.quizzer import quizzer_agent
-from server.database.generation_artifacts import generation_artifact_store
-from server.database.learning_persistence import learning_manager
+from server.database.storage_registry import (
+    generation_artifact_repository as generation_artifact_store,
+    learning_repository as learning_manager,
+)
 from server.schemas.learning import FailedStep, NodeStatus, QuizSet, TopicNode
 from server.schemas.llm import LLMContext
 from server.utils.instructor_client import instructor_client

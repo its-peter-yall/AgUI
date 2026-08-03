@@ -36,7 +36,9 @@ from typing import Any, AsyncGenerator, List, Optional, cast
 
 from openai import AsyncOpenAI
 
-from server.database.learning_persistence import learning_manager
+from server.database.storage_registry import (
+    learning_repository as learning_manager,
+)
 from server.schemas.learning import ConceptChatMessage
 from server.utils.prompt_cache import apply_openrouter_cache_control
 

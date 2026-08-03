@@ -35,11 +35,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from server.config import settings
-from server.database import generation_job_store, initialize_generation_schema
-from server.database.learning_persistence import learning_manager
-from server.database.persistence import DB_PATH
-from server.database.storage_mode import DeploymentMode, StorageContext
+from server.database.storage_mode import DeploymentMode
+from server.database.storage_registry import (
+    initialize_sqlite_storage,
+    storage_context,
+)
 from server.graph.build import CHECKPOINT_DB_PATH, build_graph
 from server.routers import learning_router, llm_router, storage_router
 from server.services.generation_runtime import GenerationRuntime
@@ -59,21 +59,16 @@ async def lifespan(app: FastAPI):
 
     # Initialize database
     try:
-        learning_manager.init_learning_tables()
-        initialize_generation_schema()
-        generation_job_store.mark_orphaned_jobs_paused(
-            pause_all_nonterminal=True
+        initialize_sqlite_storage()
+        storage_context.jobs.mark_orphaned_jobs_paused(
+            pause_all_nonterminal=True,
         )
         logger.info("Database initialized successfully.")
     except Exception:
         logger.exception("Database initialization failed")
         raise
 
-    storage = StorageContext(
-        deployment_mode=settings.deployment_mode,
-        sqlite_path=DB_PATH,
-    )
-    app.state.storage = storage
+    app.state.storage = storage_context
 
     CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(
@@ -89,8 +84,8 @@ async def lifespan(app: FastAPI):
             yield
         finally:
             await runtime.shutdown()
-            if storage.deployment_mode == DeploymentMode.LOCAL:
-                storage.disconnect()
+            if storage_context.deployment_mode == DeploymentMode.LOCAL:
+                storage_context.disconnect()
 
     logger.info("Shutting down A2UI Backend...")
 

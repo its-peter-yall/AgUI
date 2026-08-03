@@ -148,15 +148,15 @@ class ProductionRunResearchTests(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=transport) as client:
             with (
                 patch(
-                    "server.database.generation_jobs.generation_job_store",
+                    "server.database.storage_registry.generation_job_repository",
                     self.jobs,
                 ),
                 patch(
-                    "server.database.progress_events.progress_event_store",
+                    "server.database.storage_registry.progress_event_repository",
                     self.events,
                 ),
                 patch(
-                    "server.database.research_store.research_store",
+                    "server.database.storage_registry.research_repository",
                     self.research,
                 ),
                 patch(

@@ -28,7 +28,10 @@ from typing import Any, Dict, Optional
 
 from server.agents.generator import GeneratedContent, generator_agent
 from server.agents.quizzer import quizzer_agent
-from server.database.learning_persistence import learning_manager
+from server.database.storage_registry import (
+    generation_artifact_repository as generation_artifact_store,
+    learning_repository as learning_manager,
+)
 from server.schemas.learning import (
     FailedStep,
     NodeStatus,
@@ -38,9 +41,6 @@ from server.schemas.learning import (
 from server.schemas.llm import LLMContext
 
 logger = logging.getLogger(__name__)
-
-
-from server.database.generation_artifacts import generation_artifact_store
 
 
 async def regenerate_failed_node(

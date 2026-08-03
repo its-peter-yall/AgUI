@@ -44,14 +44,14 @@ from langgraph.types import Send
 from server.agents.generator import GeneratedContent, generator_agent
 from server.agents.planner import PlannerAgent, ResumablePlannerError, planner_agent
 from server.agents.quizzer import QuizzerAgent, quizzer_agent
-from server.database.generation_artifacts import (
-    GenerationArtifactConflict,
-    generation_artifact_store,
+from server.database.generation_artifacts import GenerationArtifactConflict
+from server.database.storage_registry import (
+    generation_artifact_repository as generation_artifact_store,
+    generation_job_repository as generation_job_store,
+    learning_repository as learning_manager,
+    progress_event_repository as progress_event_store,
+    research_repository as research_store,
 )
-from server.database.generation_jobs import generation_job_store
-from server.database.learning_persistence import learning_manager
-from server.database.progress_events import progress_event_store
-from server.database.research_store import research_store
 from server.graph.runner import GenerationCancelled, ResumableGenerationError
 from server.graph.state import (
     CourseGraphContext,
@@ -139,40 +139,46 @@ BatchSpec = namedtuple("BatchSpec", ["start", "size"])
 
 def _append_job_warning(session_id: str, warning: GenerationWarning) -> None:
     """Append a safe warning to the generation job public surface."""
-    generation_job_store.append_warning(session_id, warning)
+    try:
+        generation_job_store.append_warning(session_id, warning)
+    except Exception:
+        logger.debug("warning append skipped for session %s", session_id)
 
 
 def _bump_job_counts(session_id: str, **increments: Any) -> None:
     """Best-effort count/grounding update via repository (no direct SQL)."""
-    grounding_status = increments.pop("grounding_status", None)
-    mapped: dict[str, int] = {}
-    absolute_keys = {"topics_total", "briefs_ready"}
-    needs_job = bool(absolute_keys & increments.keys())
-    job = None
-    if needs_job:
-        job = generation_job_store.get_by_session(session_id)
-        if job is None:
-            return
-    for key, value in increments.items():
-        if value is None:
-            continue
-        if key.endswith("_delta"):
-            field = key[: -len("_delta")]
-            mapped[field] = mapped.get(field, 0) + int(value)
-            continue
-        if key in absolute_keys and job is not None:
-            current = int(getattr(job.counts, key))
-            delta = int(value) - current
-            if delta > 0:
-                mapped[key] = mapped.get(key, 0) + delta
-            continue
-        mapped[key] = mapped.get(key, 0) + int(value)
-    if mapped:
-        generation_job_store.bump_counts(session_id, **mapped)
-    if grounding_status is not None:
-        generation_job_store.set_grounding_status(
-            session_id, grounding_status
-        )
+    try:
+        grounding_status = increments.pop("grounding_status", None)
+        mapped: dict[str, int] = {}
+        absolute_keys = {"topics_total", "briefs_ready"}
+        needs_job = bool(absolute_keys & increments.keys())
+        job = None
+        if needs_job:
+            job = generation_job_store.get_by_session(session_id)
+            if job is None:
+                return
+        for key, value in increments.items():
+            if value is None:
+                continue
+            if key.endswith("_delta"):
+                field = key[: -len("_delta")]
+                mapped[field] = mapped.get(field, 0) + int(value)
+                continue
+            if key in absolute_keys and job is not None:
+                current = int(getattr(job.counts, key))
+                delta = int(value) - current
+                if delta > 0:
+                    mapped[key] = mapped.get(key, 0) + delta
+                continue
+            mapped[key] = mapped.get(key, 0) + int(value)
+        if mapped:
+            generation_job_store.bump_counts(session_id, **mapped)
+        if grounding_status is not None:
+            generation_job_store.set_grounding_status(
+                session_id, grounding_status
+            )
+    except Exception:
+        logger.debug("count bump skipped for session %s", session_id)
 
 
 def select_topic_batch(cursor: int, total_topics: int) -> BatchSpec:

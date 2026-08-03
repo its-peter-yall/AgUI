@@ -44,11 +44,13 @@ from server.agents.planner import OutlineTopicCountError
 from server.database.generation_jobs import (
     GenerationJobNotFound,
     InvalidGenerationTransition,
-    generation_job_store,
 )
-from server.database.learning_persistence import learning_manager
-from server.database.progress_events import progress_event_store
-from server.database.research_store import research_store
+from server.database.storage_registry import (
+    generation_job_repository as generation_job_store,
+    learning_repository as learning_manager,
+    progress_event_repository as progress_event_store,
+    research_repository as research_store,
+)
 from server.graph.build import get_graph
 from server.schemas.search import SearchContext, get_search_context
 from server.graph.regen import regenerate_failed_node, regenerate_topic_node
@@ -1413,7 +1415,6 @@ async def regenerate_node_endpoint(
     - LOCKED → 400 error
     """
     require_agent_models(llm_context)
-    from server.database.learning_persistence import learning_manager
 
     node = learning_manager.get_concept_node(node_id)
     if not node:

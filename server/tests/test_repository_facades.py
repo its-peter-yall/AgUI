@@ -69,6 +69,16 @@ class RepositoryFacadeTests(unittest.TestCase):
         self.assertEqual(result, {"id": "s1"})
         expected.assert_called_once_with("s1")
 
+    def test_production_modules_import_repository_facades(self) -> None:
+        from server.database.storage_registry import learning_repository
+        from server.graph import nodes, regen, regen_stream, runner
+        from server.routers import learning
+
+        modules = (nodes, regen, regen_stream, runner, learning)
+        for module in modules:
+            with self.subTest(module=module.__name__):
+                self.assertIs(module.learning_manager, learning_repository)
+
 
 if __name__ == "__main__":
     unittest.main()

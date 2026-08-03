@@ -29,9 +29,11 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from server.database.generation_jobs import generation_job_store
-from server.database.learning_persistence import learning_manager
-from server.database.progress_events import progress_event_store
+from server.database.storage_registry import (
+    generation_job_repository as generation_job_store,
+    learning_repository as learning_manager,
+    progress_event_repository as progress_event_store,
+)
 from server.schemas.generation import (
     GENERATION_LOCK_HEARTBEAT_SECONDS,
     GENERATION_MAX_CONCURRENCY,

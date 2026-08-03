@@ -45,6 +45,7 @@ from server.schemas.progress import (
 )
 from server.schemas.research import (
     CoverageItem,
+    CoverageTheme,
     ResearchFinalization,
     ResearchIteration,
     ResearchPlan,
@@ -54,6 +55,7 @@ from server.schemas.research import (
 from server.search.budget import (
     ResearchBudgetExceeded,
     ResearchBudgetLedger,
+    format_budget_for_prompt,
     resolve_research_budget,
 )
 from server.search.source_safety import (
@@ -288,10 +290,14 @@ class ResearchRunner:
                     shared_ledger.budget = bootstrap
                     ledger = shared_ledger
                 ledger.reserve_llm_turn()
+                budget_context = format_budget_for_prompt(
+                    ledger.remaining_snapshot()
+                )
                 plan = await self._agent.analyze_query(
                     query=query,
                     resolved_mode=resolved_mode,
                     llm_context=llm_context,
+                    budget_context=budget_context,
                 )
                 coverage = list(plan.coverage)
                 pending_queries = list(plan.initial_queries)
@@ -503,6 +509,13 @@ class ResearchRunner:
                     )
                     break
 
+                target_theme = self._select_target_theme(
+                    coverage, completed_themes
+                )
+                uncovered = self._uncovered_required_themes(coverage)
+                budget_context = format_budget_for_prompt(
+                    ledger.remaining_snapshot()
+                )
                 draft: ResearchIteration = (
                     await self._agent.synthesize_iteration(
                         query=query,
@@ -510,8 +523,15 @@ class ResearchRunner:
                         coverage=coverage,
                         untrusted_source_context=untrusted,
                         llm_context=llm_context,
+                        target_theme=target_theme,
+                        budget_context=budget_context,
+                        uncovered_themes=uncovered,
                     )
                 )
+                if target_theme:
+                    draft = draft.model_copy(
+                        update={"theme": target_theme}
+                    )
                 allowed_ids = set(sources_by_id.keys())
                 draft = await self._validate_source_ids(
                     draft=draft,
@@ -561,6 +581,12 @@ class ResearchRunner:
                     draft.coverage_updates,
                     allowed_ids=allowed_ids,
                 )
+                if target_theme:
+                    still = self._uncovered_required_themes(coverage)
+                    if target_theme in still and not draft.source_ids:
+                        coverage = self._mark_theme_explicit_unknown(
+                            coverage, target_theme
+                        )
                 next_section_index += 1
                 iteration += 1
 
@@ -705,13 +731,30 @@ class ResearchRunner:
         final: Optional[ResearchFinalization] = None
         try:
             if ledger is not None:
-                ledger.reserve_llm_turn()
+                ledger.reserve_finalization_turn()
+            finalize_budget = None
+            if ledger is not None:
+                finalize_budget = format_budget_for_prompt(
+                    ledger.remaining_snapshot()
+                )
             final = await self._agent.finalize_report(
                 query=query,
                 coverage=coverage,
                 sections=list(section_markdowns),
                 conflicts=list(conflicts),
                 llm_context=llm_context,
+                budget_context=finalize_budget,
+            )
+        except ResearchBudgetExceeded as exc:
+            logger.warning(
+                "finalize_report skipped at budget limit: %s",
+                exc.limit_name,
+            )
+            final = ResearchFinalization(
+                summary="Research ended with limited synthesis.",
+                limitations=limitations
+                or [f"Stopped at budget limit: {exc.limit_name}."],
+                freshness_note="Retrieval time recorded at run end.",
             )
         except Exception as exc:
             logger.warning("finalize_report failed: %s", type(exc).__name__)
@@ -977,6 +1020,80 @@ class ResearchRunner:
             )
 
     @staticmethod
+    def _theme_value(theme: Any) -> str:
+        if hasattr(theme, "value"):
+            return str(theme.value)
+        return str(theme)
+
+    @staticmethod
+    def _uncovered_required_themes(
+        coverage: Sequence[CoverageItem],
+    ) -> list[str]:
+        out: list[str] = []
+        for item in coverage:
+            if not item.required:
+                continue
+            if item.covered or item.explicit_unknown:
+                continue
+            out.append(ResearchRunner._theme_value(item.theme))
+        return out
+
+    @staticmethod
+    def _select_target_theme(
+        coverage: Sequence[CoverageItem],
+        completed_themes: Sequence[str],
+    ) -> Optional[str]:
+        uncovered = ResearchRunner._uncovered_required_themes(coverage)
+        if not uncovered:
+            return None
+        completed = {
+            ResearchRunner._theme_value(t).lower()
+            for t in completed_themes
+        }
+        for theme in uncovered:
+            if theme.lower() not in completed:
+                return theme
+        return uncovered[0]
+
+    @staticmethod
+    def _mark_theme_explicit_unknown(
+        coverage: list[CoverageItem],
+        theme: str,
+    ) -> list[CoverageItem]:
+        target = theme.lower()
+        try:
+            enum_theme = CoverageTheme(theme)
+        except ValueError:
+            enum_theme = None
+        out: list[CoverageItem] = []
+        found = False
+        for item in coverage:
+            item_val = ResearchRunner._theme_value(item.theme).lower()
+            if item_val == target:
+                found = True
+                out.append(
+                    item.model_copy(
+                        update={
+                            "covered": False,
+                            "explicit_unknown": True,
+                        }
+                    )
+                )
+            else:
+                out.append(item)
+        if not found and enum_theme is not None:
+            out.append(
+                CoverageItem(
+                    theme=enum_theme,
+                    required=True,
+                    covered=False,
+                    explicit_unknown=True,
+                    source_ids=[],
+                )
+            )
+        return out
+
+    @staticmethod
     def _apply_coverage_updates(
         coverage: list[CoverageItem],
         updates: Sequence[CoverageItem],
@@ -1002,6 +1119,12 @@ class ResearchRunner:
                         or update.explicit_unknown,
                     }
                 )
+            if (
+                update.covered
+                and not cleaned_ids
+                and not update.explicit_unknown
+            ):
+                update = update.model_copy(update={"covered": False})
             by_theme[update.theme] = update
         # Preserve original order then append new themes
         ordered: list[CoverageItem] = []
@@ -1036,9 +1159,11 @@ async def run_research(
     import httpx
 
     from server.agents.researcher import researcher_agent
-    from server.database.generation_jobs import generation_job_store
-    from server.database.progress_events import progress_event_store
-    from server.database.research_store import research_store
+    from server.database.storage_registry import (
+        generation_job_repository as generation_job_store,
+        progress_event_repository as progress_event_store,
+        research_repository as research_store,
+    )
     from server.search.adapters import build_search_adapters
     from server.search.coordinator import ProviderCoordinator
 

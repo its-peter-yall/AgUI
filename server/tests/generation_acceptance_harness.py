@@ -334,21 +334,33 @@ class GenerationAcceptanceHarness:
             ("server.routers.learning.learning_manager", learning),
             ("server.routers.learning.generation_job_store", jobs),
             ("server.routers.learning.research_store", research),
-            ("server.database.generation_jobs.progress_event_store", events),
+            ("server.routers.learning.progress_event_store", events),
+            (
+                "server.database.storage_registry.generation_job_repository",
+                jobs,
+            ),
+            (
+                "server.database.storage_registry.generation_artifact_repository",
+                artifacts,
+            ),
+            (
+                "server.database.storage_registry.progress_event_repository",
+                events,
+            ),
+            (
+                "server.database.storage_registry.research_repository",
+                research,
+            ),
+            (
+                "server.database.storage_registry.learning_repository",
+                learning,
+            ),
         ):
             try:
                 stack.enter_context(patch(target, value))
             except Exception:
                 # Some targets may not resolve until import; ignore optional ones.
                 pass
-
-        # to_public uses module-level progress_event_store for last_event_id
-        stack.enter_context(
-            patch(
-                "server.database.progress_events.progress_event_store",
-                events,
-            )
-        )
 
         harness = cls(
             temp_dir=temp_dir,

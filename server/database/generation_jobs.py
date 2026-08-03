@@ -288,7 +288,9 @@ class GenerationJobStore:
         event_id = last_event_id
         if event_id is None:
             try:
-                from server.database.progress_events import progress_event_store
+                from server.database.storage_registry import (
+                    progress_event_repository as progress_event_store,
+                )
 
                 event_id = progress_event_store.latest_id(job.session_id)
             except Exception:
