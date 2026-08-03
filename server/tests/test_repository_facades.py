@@ -79,6 +79,68 @@ class RepositoryFacadeTests(unittest.TestCase):
             with self.subTest(module=module.__name__):
                 self.assertIs(module.learning_manager, learning_repository)
 
+    def test_connect_swaps_learning_repository_facade_to_mongo(self) -> None:
+        """H4: after StorageContext.connect, facade hits Mongo impl."""
+        from server.database.mongo_client import MongoConnection
+        from server.database.repositories.bundle import RepositoryBundle
+        from server.database.storage_registry import (
+            learning_repository,
+            storage_context,
+        )
+
+        mongo_learning = MagicMock(name="mongo-learning")
+        mongo_learning.get_learning_session.return_value = {
+            "id": "mongo-s1",
+        }
+        mongo_jobs = MagicMock(name="mongo-jobs")
+        mongo_bundle = RepositoryBundle(
+            learning=mongo_learning,
+            jobs=mongo_jobs,
+            artifacts=MagicMock(),
+            research=MagicMock(),
+            progress=MagicMock(),
+            app_settings=MagicMock(),
+        )
+        client = MagicMock()
+        connection = MongoConnection(
+            client=client,
+            database=MagicMock(),
+            db_name="atlas",
+        )
+        original_repos = storage_context._repositories
+        original_mongo = storage_context._mongo
+        original_backend = storage_context.active_backend
+        original_factory = storage_context._mongo_factory
+        original_bundle_factory = storage_context._mongo_bundle_factory
+        original_indexer = storage_context._mongo_indexer
+        try:
+            storage_context._mongo_factory = MagicMock(
+                return_value=connection,
+            )
+            storage_context._mongo_bundle_factory = MagicMock(
+                return_value=mongo_bundle,
+            )
+            storage_context._mongo_indexer = MagicMock()
+            storage_context.connect("mongodb://host", "atlas")
+            result = learning_repository.get_learning_session("mongo-s1")
+        finally:
+            if storage_context._mongo is not None:
+                storage_context._mongo.client.close()
+            storage_context._mongo = original_mongo
+            storage_context._repositories = original_repos
+            storage_context.active_backend = original_backend
+            storage_context._mongo_factory = original_factory
+            storage_context._mongo_bundle_factory = original_bundle_factory
+            storage_context._mongo_indexer = original_indexer
+
+        self.assertEqual(result, {"id": "mongo-s1"})
+        mongo_learning.get_learning_session.assert_called_once_with(
+            "mongo-s1",
+        )
+        mongo_jobs.mark_orphaned_jobs_paused.assert_called_once_with(
+            pause_all_nonterminal=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

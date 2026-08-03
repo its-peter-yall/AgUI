@@ -248,6 +248,70 @@ class StorageContextTests(unittest.TestCase):
         context.disconnect()
         controller.activate_sqlite.assert_called_once_with()
 
+    def test_connect_pauses_orphaned_mongo_jobs(self) -> None:
+        """C1: local POST /connect and cloud share orphan pause on swap."""
+        mongo_bundle = make_bundle("mongo")
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=mongo_bundle),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+        )
+
+        context.connect("mongodb://host", "atlas")
+
+        mongo_bundle.jobs.mark_orphaned_jobs_paused.assert_called_once_with(
+            pause_all_nonterminal=True,
+        )
+
+    def test_connect_swaps_facade_targets_to_mongo_impl(self) -> None:
+        """H4: after connect, context learning/jobs resolve Mongo bundle."""
+        mongo_bundle = make_bundle("mongo")
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=mongo_bundle),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+        )
+        self.assertIs(context.learning, self.sqlite_bundle.learning)
+
+        context.connect("mongodb://host", "atlas")
+
+        self.assertIs(context.learning, mongo_bundle.learning)
+        self.assertIs(context.jobs, mongo_bundle.jobs)
+        self.assertIs(context.artifacts, mongo_bundle.artifacts)
+        self.assertIs(context.research, mongo_bundle.research)
+        self.assertIs(context.progress, mongo_bundle.progress)
+
+    def test_local_data_present_probes_beyond_learning_sessions(self) -> None:
+        """M1: generation-only local DB still reports data present."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "CREATE TABLE generation_jobs ("
+                "id TEXT PRIMARY KEY, session_id TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO generation_jobs (id, session_id) "
+                "VALUES ('j1', 's1')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        context = make_context(
+            sqlite_path=self.db_path,
+            mongo_factory=MagicMock(return_value=self.connection),
+            mongo_bundle_factory=MagicMock(return_value=make_bundle("mongo")),
+            mongo_indexer=MagicMock(),
+            sqlite_repositories=self.sqlite_bundle,
+        )
+        self.assertTrue(context.local_data_present())
+
 
 if __name__ == "__main__":
     unittest.main()

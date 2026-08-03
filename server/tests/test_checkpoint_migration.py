@@ -44,7 +44,12 @@ def make_checkpoint_tuple():
                 "checkpoint_id": "cp2",
             }
         },
-        checkpoint={"id": "cp2", "v": 1},
+        checkpoint={
+            "id": "cp2",
+            "v": 1,
+            "channel_versions": {"messages": "3", "channel": 2},
+            "channel_values": {"messages": [], "channel": "x"},
+        },
         metadata={"step": 2},
         parent_config={
             "configurable": {
@@ -78,9 +83,26 @@ class CheckpointMigrationTests(unittest.IsolatedAsyncioTestCase):
             write_config["configurable"]["checkpoint_id"],
             "cp1",
         )
+        new_versions = target.aput.call_args.args[3]
+        self.assertEqual(
+            new_versions,
+            {"messages": "3", "channel": 2},
+        )
         self.assertEqual(target.aput_writes.await_count, 2)
         self.assertEqual(summary.checkpoints, 1)
         self.assertEqual(summary.writes, 3)
+
+    async def test_aput_uses_empty_versions_when_checkpoint_lacks_map(
+        self,
+    ) -> None:
+        item = make_checkpoint_tuple()
+        item.checkpoint = {"id": "cp2", "v": 1}
+        target = SimpleNamespace(
+            aput=AsyncMock(),
+            aput_writes=AsyncMock(),
+        )
+        await copy_checkpoints(FakeSqliteSaver([item]), target)
+        self.assertEqual(target.aput.call_args.args[3], {})
 
     async def test_empty_source_is_successful(self) -> None:
         target = SimpleNamespace(

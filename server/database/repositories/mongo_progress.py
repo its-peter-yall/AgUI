@@ -87,6 +87,25 @@ class MongoProgressEventRepository:
         payload_doc = model_payload(payload)
         payload_json = canonical_json(payload)
         try:
+            # Find-by-dedupe first so pure retries never burn counter IDs.
+            existing_doc = self._events.find_one(
+                {
+                    "session_id": session_id,
+                    "dedupe_key": dedupe_key,
+                }
+            )
+            if existing_doc is not None:
+                existing = self._event(existing_doc)
+                if (
+                    existing.event_type == event_type
+                    and canonical_json(existing.payload) == payload_json
+                ):
+                    return existing
+                raise ProgressEventConflict(
+                    f"Dedupe key {dedupe_key!r} already exists for session"
+                    f" {session_id} with a different event"
+                )
+
             counter = self._counters.find_one_and_update(
                 {"_id": "progress_events"},
                 {"$inc": {"value": 1}},
@@ -105,15 +124,15 @@ class MongoProgressEventRepository:
             try:
                 self._events.insert_one(document)
             except DuplicateKeyError:
-                existing_doc = self._events.find_one(
+                raced = self._events.find_one(
                     {
                         "session_id": session_id,
                         "dedupe_key": dedupe_key,
                     }
                 )
-                if existing_doc is None:
+                if raced is None:
                     raise
-                existing = self._event(existing_doc)
+                existing = self._event(raced)
                 if (
                     existing.event_type == event_type
                     and canonical_json(existing.payload) == payload_json

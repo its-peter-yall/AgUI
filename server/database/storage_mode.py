@@ -191,6 +191,12 @@ class StorageContext:
         if previous is not None:
             previous.client.close()
 
+        # Pause nonterminal jobs left by prior process crash/kill so
+        # cloud startup and local POST /connect share same recovery.
+        repositories.jobs.mark_orphaned_jobs_paused(
+            pause_all_nonterminal=True,
+        )
+
     def disconnect(self) -> None:
         with self._lock:
             previous = self._mongo
@@ -215,11 +221,23 @@ class StorageContext:
     def local_data_present(self) -> bool:
         if not self.sqlite_path.exists():
             return False
+        # Any migratable table row counts (not only learning_sessions).
+        from server.database.migrate_to_mongo import MIGRATION_TABLES
+
         try:
-            with sqlite3.connect(self.sqlite_path) as connection:
-                row = connection.execute(
-                    "SELECT 1 FROM learning_sessions LIMIT 1"
-                ).fetchone()
+            connection = sqlite3.connect(self.sqlite_path)
+            try:
+                for table in MIGRATION_TABLES:
+                    try:
+                        row = connection.execute(
+                            f"SELECT 1 FROM {table} LIMIT 1"
+                        ).fetchone()
+                    except sqlite3.Error:
+                        continue
+                    if row is not None:
+                        return True
+            finally:
+                connection.close()
         except sqlite3.Error:
             return False
-        return row is not None
+        return False

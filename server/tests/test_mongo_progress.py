@@ -63,6 +63,7 @@ class MongoProgressTests(unittest.TestCase):
         self.repository = MongoProgressEventRepository(self.database)
 
     def test_append_allocates_monotonic_integer_id(self) -> None:
+        self.events.find_one.return_value = None
         self.counters.find_one_and_update.return_value = {
             "_id": "progress_events",
             "value": 42,
@@ -78,11 +79,28 @@ class MongoProgressTests(unittest.TestCase):
         self.assertEqual(event.id, 42)
 
     def test_duplicate_equal_payload_returns_existing_event(self) -> None:
+        # Race path: first find misses, insert hits unique, second find hits.
+        self.events.find_one.side_effect = [
+            None,
+            make_event_document(),
+        ]
         self.counters.find_one_and_update.return_value = {
             "_id": "progress_events",
             "value": 2,
         }
         self.events.insert_one.side_effect = DuplicateKeyError("duplicate")
+        event = self.repository.append_once(
+            session_id="s1",
+            event_type=ProgressEventType.STAGE_CHANGED,
+            payload=make_stage_payload(),
+            dedupe_key="stage:1",
+        )
+        self.assertEqual(event.id, 1)
+
+    def test_dedupe_hit_finds_existing_before_counter_increment(
+        self,
+    ) -> None:
+        """H6: pure dedupe must not burn monotonic counter IDs."""
         self.events.find_one.return_value = make_event_document()
         event = self.repository.append_once(
             session_id="s1",
@@ -91,6 +109,8 @@ class MongoProgressTests(unittest.TestCase):
             dedupe_key="stage:1",
         )
         self.assertEqual(event.id, 1)
+        self.counters.find_one_and_update.assert_not_called()
+        self.events.insert_one.assert_not_called()
 
 
 if __name__ == "__main__":

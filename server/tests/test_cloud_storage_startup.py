@@ -89,6 +89,38 @@ class CloudStorageLifecycleTests(unittest.IsolatedAsyncioTestCase):
         runtime_type.assert_called_once_with(app_state=app_state)
         self.assertIs(runtime, runtime_type.return_value)
 
+    async def test_cloud_startup_pauses_orphaned_jobs_via_connect(
+        self,
+    ) -> None:
+        """C1: cloud path must pause nonterminal jobs after Mongo connect."""
+        storage = MagicMock()
+        storage.mongo_connection.client = MagicMock()
+        jobs = MagicMock()
+        storage.jobs = jobs
+
+        def connect_and_pause(uri: str, db_name: str) -> None:
+            storage.active_backend = StorageBackend.MONGO
+            # Real StorageContext.connect pauses after swap; simulate.
+            storage.jobs.mark_orphaned_jobs_paused(
+                pause_all_nonterminal=True,
+            )
+
+        storage.connect.side_effect = connect_and_pause
+        runtime_type = MagicMock()
+
+        await start_cloud_runtime(
+            app_state=SimpleNamespace(),
+            storage=storage,
+            uri="mongodb://host",
+            db_name="a2ui",
+            runtime_type=runtime_type,
+        )
+
+        storage.connect.assert_called_once()
+        jobs.mark_orphaned_jobs_paused.assert_called_once_with(
+            pause_all_nonterminal=True,
+        )
+
     async def test_cloud_startup_failure_does_not_create_runtime(self) -> None:
         storage = MagicMock()
         storage.connect.side_effect = MongoUnavailableError("down")

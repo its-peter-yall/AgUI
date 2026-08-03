@@ -53,11 +53,17 @@ async def copy_checkpoints(
             write_config["configurable"]["checkpoint_id"] = (
                 parent["checkpoint_id"]
             )
+        # CheckpointTuple does not expose new_versions separately; the
+        # channel version map lives on the checkpoint document itself.
+        # Passing full map keeps blob-based savers (and future targets)
+        # able to materialize every channel value after migrate.
+        checkpoint = item.checkpoint
+        new_versions = dict(checkpoint.get("channel_versions") or {})
         await target.aput(
             write_config,
-            item.checkpoint,
+            checkpoint,
             item.metadata,
-            {},
+            new_versions,
         )
         checkpoint_count += 1
 

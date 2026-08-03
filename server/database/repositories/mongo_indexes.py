@@ -36,7 +36,10 @@ def ensure_learning_indexes(database: Any) -> None:
         [("learning_session_id", 1), ("sequence_index", 1)],
         unique=True,
     )
-    database["quiz_data"].create_index([("node_id", 1)])
+    database["quiz_data"].create_index(
+        [("node_id", 1)],
+        unique=True,
+    )
     database["quiz_attempts"].create_index([("node_id", 1)])
     database["quiz_attempts"].create_index(
         [("node_id", 1), ("attempt_number", 1)]

@@ -69,6 +69,10 @@ class MongoCommonTests(unittest.TestCase):
                 ),
             ]
         )
+        database["quiz_data"].create_index.assert_any_call(
+            [("node_id", 1)],
+            unique=True,
+        )
         database["revision_node_progress"].create_index.assert_any_call(
             [("revision_session_id", 1), ("node_id", 1)],
             unique=True,

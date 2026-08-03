@@ -283,43 +283,82 @@ class MongoLearningRepository:
             else []
         )
 
-        if section_ids:
-            self._db["research_section_sources"].delete_many(
-                {"section_id": {"$in": section_ids}}
-            )
-        if report_ids:
-            self._db["research_provider_statuses"].delete_many(
-                {"report_id": {"$in": report_ids}}
-            )
-            sections.delete_many({"report_id": {"$in": report_ids}})
-        self._db["research_sources"].delete_many({"session_id": session_id})
-        reports.delete_many({"session_id": session_id})
+        with self._db.client.start_session() as mongo_session:
+            with mongo_session.start_transaction():
+                if section_ids:
+                    self._db["research_section_sources"].delete_many(
+                        {"section_id": {"$in": section_ids}},
+                        session=mongo_session,
+                    )
+                if report_ids:
+                    self._db["research_provider_statuses"].delete_many(
+                        {"report_id": {"$in": report_ids}},
+                        session=mongo_session,
+                    )
+                    sections.delete_many(
+                        {"report_id": {"$in": report_ids}},
+                        session=mongo_session,
+                    )
+                self._db["research_sources"].delete_many(
+                    {"session_id": session_id},
+                    session=mongo_session,
+                )
+                reports.delete_many(
+                    {"session_id": session_id},
+                    session=mongo_session,
+                )
 
-        if revision_ids:
-            self._attempts.delete_many(
-                {"revision_session_id": {"$in": revision_ids}}
-            )
-            self._revision_nodes.delete_many(
-                {"revision_session_id": {"$in": revision_ids}}
-            )
-            self._revisions.delete_many({"_id": {"$in": revision_ids}})
-        if node_ids:
-            self._attempts.delete_many({"node_id": {"$in": node_ids}})
-            self._quizzes.delete_many({"node_id": {"$in": node_ids}})
-            self._db["node_sources"].delete_many(
-                {"node_id": {"$in": node_ids}}
-            )
-            self._db["generation_briefs"].delete_many(
-                {"node_id": {"$in": node_ids}}
-            )
-            self._nodes.delete_many({"_id": {"$in": node_ids}})
+                if revision_ids:
+                    self._attempts.delete_many(
+                        {"revision_session_id": {"$in": revision_ids}},
+                        session=mongo_session,
+                    )
+                    self._revision_nodes.delete_many(
+                        {"revision_session_id": {"$in": revision_ids}},
+                        session=mongo_session,
+                    )
+                    self._revisions.delete_many(
+                        {"_id": {"$in": revision_ids}},
+                        session=mongo_session,
+                    )
+                if node_ids:
+                    self._attempts.delete_many(
+                        {"node_id": {"$in": node_ids}},
+                        session=mongo_session,
+                    )
+                    self._quizzes.delete_many(
+                        {"node_id": {"$in": node_ids}},
+                        session=mongo_session,
+                    )
+                    self._db["node_sources"].delete_many(
+                        {"node_id": {"$in": node_ids}},
+                        session=mongo_session,
+                    )
+                    self._db["generation_briefs"].delete_many(
+                        {"node_id": {"$in": node_ids}},
+                        session=mongo_session,
+                    )
+                    self._nodes.delete_many(
+                        {"_id": {"$in": node_ids}},
+                        session=mongo_session,
+                    )
 
-        self._db["generation_briefs"].delete_many(
-            {"session_id": session_id}
-        )
-        self._db["generation_jobs"].delete_many({"session_id": session_id})
-        self._db["progress_events"].delete_many({"session_id": session_id})
-        result = self._sessions.delete_one({"_id": session_id})
+                self._db["generation_briefs"].delete_many(
+                    {"session_id": session_id},
+                    session=mongo_session,
+                )
+                self._db["generation_jobs"].delete_many(
+                    {"session_id": session_id},
+                    session=mongo_session,
+                )
+                self._db["progress_events"].delete_many(
+                    {"session_id": session_id},
+                    session=mongo_session,
+                )
+                result = self._sessions.delete_one(
+                    {"_id": session_id},
+                    session=mongo_session,
+                )
         return result.deleted_count > 0
 
     def create_concept_node(
@@ -670,11 +709,33 @@ class MongoLearningRepository:
                 "created_at": now,
                 "updated_at": now,
             }
-        self._quizzes.replace_one(
-            {"node_id": node_id},
-            document,
-            upsert=True,
-        )
+        try:
+            self._quizzes.replace_one(
+                {"node_id": node_id},
+                document,
+                upsert=True,
+            )
+        except DuplicateKeyError:
+            # Unique node_id race: another writer inserted first. Retry
+            # against the winner's _id so 1:1 node/quiz holds.
+            raced = self._quizzes.find_one({"node_id": node_id})
+            if raced is None:
+                raise
+            document = {
+                "_id": raced["_id"],
+                "node_id": node_id,
+                "payload": payload,
+                "format_version": format_version,
+                "shuffle_seed": shuffle_seed,
+                "current_index": current_index,
+                "created_at": raced.get("created_at", now),
+                "updated_at": now,
+            }
+            self._quizzes.replace_one(
+                {"node_id": node_id},
+                document,
+                upsert=True,
+            )
         return document
 
     def _get_node_by_id(self, node_id: str) -> Optional[dict[str, Any]]:
