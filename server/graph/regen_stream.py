@@ -136,14 +136,16 @@ async def stream_regenerate_node_generator(
                 {"role": "user", "content": user_message},
             ]
 
-            api_key = (
-                llm_context.get_api_key()
-                if hasattr(llm_context, "get_api_key")
-                else llm_context.api_key
-            )
-            model_override = llm_context.model
+            try:
+                model_slug, provider, api_key, reasoning_params = (
+                    llm_context.resolve_agent_call(generator_agent.role)
+                )
+            except ValueError as exc:
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
             attribution_headers = llm_context.get_attribution_headers()
-            reasoning_params = llm_context.get_reasoning_params()
 
             instructor_client._raise_for_invalid_state(generator_agent.role)
             if not api_key:
@@ -152,11 +154,11 @@ async def stream_regenerate_node_generator(
                 return
 
             config = instructor_client.get_model_config(generator_agent.role)
-            if not model_override or not model_override.strip():
+            if not model_slug or not model_slug.strip():
                 yield f"data: {json.dumps({'error': 'No model specified for generator.'})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
-            model_slug = model_override.strip()
+            model_slug = model_slug.strip()
 
             temperature = config.get("temperature", 0.7)
             max_tokens = config.get("max_tokens", 60000)
@@ -165,7 +167,7 @@ async def stream_regenerate_node_generator(
                 if max_tokens > llm_context.max_completion_tokens:
                     max_tokens = llm_context.max_completion_tokens
 
-            base_url, timeout = instructor_client._get_provider_config(llm_context.provider)
+            base_url, timeout = instructor_client._get_provider_config(provider)
             base_client = AsyncOpenAI(
                 base_url=base_url,
                 api_key=api_key,

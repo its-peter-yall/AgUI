@@ -117,25 +117,20 @@ class BaseAgent(ABC):
         """
         if not llm_context:
             raise ValueError("AI API key is required in llm_context.")
-        api_key = (
-            llm_context.get_api_key()
-            if hasattr(llm_context, "get_api_key")
-            else str(getattr(llm_context, "api_key", "") or "")
-        )
-        if hasattr(api_key, "get_secret_value"):
-            api_key = api_key.get_secret_value()
-        if not api_key:
-            provider_name = llm_context.provider.value.title() if llm_context else "AI"
-            raise ValueError(f"{provider_name} API key is required in llm_context.")
 
         full_system_prompt = self._build_system_prompt(
             context, system_prompt_override=system_prompt_override
         )
         messages = [{"role": "user", "content": user_message}]
 
-        model_override = llm_context.model
+        model_override, provider, api_key, reasoning_params = (
+            llm_context.resolve_agent_call(self._role)
+        )
+        if not api_key:
+            raise ValueError(
+                f"{provider.value.title()} API key is required in llm_context."
+            )
         attribution_headers = llm_context.get_attribution_headers()
-        reasoning_params = llm_context.get_reasoning_params()
 
         response = await instructor_client.create_structured(
             role=self._role,
@@ -145,7 +140,7 @@ class BaseAgent(ABC):
             model_override=model_override,
             attribution_headers=attribution_headers,
             system_prompt=full_system_prompt,
-            provider=llm_context.provider,
+            provider=provider,
             reasoning_params=reasoning_params,
             max_completion_tokens=llm_context.max_completion_tokens,
             **kwargs,

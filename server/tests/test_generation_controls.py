@@ -27,7 +27,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.routers.learning import router
-from server.schemas.llm import LLMContext, get_llm_context
+from server.schemas.llm import get_llm_context
+from server.tests.llm_test_helpers import make_test_llm_context
 
 
 def _client(runtime) -> TestClient:
@@ -35,7 +36,7 @@ def _client(runtime) -> TestClient:
     app.state.generation_runtime = runtime
     app.state.checkpointer = SimpleNamespace(adelete_thread=AsyncMock())
     app.include_router(router)
-    app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+    app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
         api_key="fresh-llm-key",
         model="test/model",
     )

@@ -84,7 +84,11 @@ from server.schemas.learning import (
 )
 from server.agents.generator import generator_agent
 from server.agents.quizzer import quizzer_agent
-from server.schemas.llm import LLMContext, get_llm_context
+from server.schemas.llm import (
+    LLMContext,
+    get_llm_context,
+    require_agent_models,
+)
 from server.schemas.research import ResearchReport
 from server.services.concept_chat import stream_concept_chat
 from server.services.depth_router import resolve_depth_mode
@@ -334,6 +338,7 @@ async def generate_course(
     search_context: SearchContext = Depends(get_search_context),
 ) -> JSONResponse:
     """Accept generation and return shell + public job immediately."""
+    require_agent_models(llm_context)
     try:
         runtime = getattr(request.app.state, "generation_runtime", None)
         if runtime is None:
@@ -917,6 +922,7 @@ async def resume_generation(
     search_context: SearchContext = Depends(get_search_context),
 ) -> JSONResponse:
     """Resume generation with fresh LLM/search secrets."""
+    require_agent_models(llm_context)
     session = learning_manager.get_learning_session(session_id)
     if not session:
         raise HTTPException(
@@ -1406,6 +1412,7 @@ async def regenerate_node_endpoint(
     - Non-ERROR, non-LOCKED → regenerate_topic_node (full regen)
     - LOCKED → 400 error
     """
+    require_agent_models(llm_context)
     from server.database.learning_persistence import learning_manager
 
     node = learning_manager.get_concept_node(node_id)
@@ -1486,6 +1493,7 @@ async def stream_regenerate_node_endpoint(
     llm_context: LLMContext = Depends(get_llm_context),
 ) -> StreamingResponse:
     """Stream regeneration of content and quizzes for a concept node."""
+    require_agent_models(llm_context)
     from server.graph.regen_stream import stream_regenerate_node_generator
 
     return StreamingResponse(

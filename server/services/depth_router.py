@@ -80,16 +80,19 @@ async def classify_depth(
         "Classify curriculum depth for this learning query:\n\n"
         f"{query}"
     )
+    model, provider, key, reasoning = llm_context.resolve_agent_call(
+        "depth_router"
+    )
     return await instructor_client.create_structured(
         role="depth_router",
         response_model=DepthRouteResult,
         messages=[{"role": "user", "content": user_message}],
-        api_key=llm_context.get_api_key(),
-        model_override=llm_context.model,
+        api_key=key,
+        model_override=model,
         attribution_headers=llm_context.get_attribution_headers(),
         system_prompt=DEPTH_ROUTER_SYSTEM_PROMPT,
-        provider=llm_context.provider,
-        reasoning_params=llm_context.get_reasoning_params(),
+        provider=provider,
+        reasoning_params=reasoning,
         max_completion_tokens=llm_context.max_completion_tokens,
     )
 

@@ -28,12 +28,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 from server.main import app
-from server.schemas.llm import get_llm_context, LLMContext
+from server.schemas.llm import get_llm_context
+from server.tests.llm_test_helpers import make_test_llm_context
 
 def _client() -> TestClient:
-    app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+    app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
         api_key="test_key",
-        model="test_model"
+        model="test_model",
     )
     return TestClient(app)
 

@@ -27,7 +27,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from server.routers.learning import router
-from server.schemas.llm import LLMContext, get_llm_context
+from server.schemas.llm import get_llm_context
+from server.tests.llm_test_helpers import make_test_llm_context
 
 
 def _accepted() -> dict[str, object]:
@@ -80,7 +81,7 @@ class GenerationApiTests(unittest.TestCase):
         runtime = SimpleNamespace(start=AsyncMock(return_value=_accepted()))
         app.state.generation_runtime = runtime
         app.include_router(router)
-        app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+        app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
             api_key="llm-secret",
             model="test/model",
         )
@@ -110,7 +111,7 @@ class GenerationApiTests(unittest.TestCase):
         runtime = SimpleNamespace(start=AsyncMock())
         app.state.generation_runtime = runtime
         app.include_router(router)
-        app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+        app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
             api_key="llm-key",
             model="test/model",
         )

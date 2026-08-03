@@ -43,7 +43,8 @@ from server.schemas.learning import (
     QuizOption,
     QuizSet,
 )
-from server.schemas.llm import LLMContext, get_llm_context
+from server.schemas.llm import get_llm_context
+from server.tests.llm_test_helpers import make_test_llm_context
 
 
 def _result() -> dict[str, object]:
@@ -79,7 +80,7 @@ def _result() -> dict[str, object]:
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+    app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
         api_key="test-key",
         model="test/model",
     )
@@ -134,7 +135,7 @@ def _client_with_runtime(runtime=None) -> TestClient:
         start=AsyncMock(return_value=_accepted_payload()),
     )
     app.include_router(router)
-    app.dependency_overrides[get_llm_context] = lambda: LLMContext(
+    app.dependency_overrides[get_llm_context] = lambda: make_test_llm_context(
         api_key="test-key",
         model="test/model",
     )
