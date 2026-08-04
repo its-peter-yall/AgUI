@@ -77,16 +77,19 @@ describe('SettingsPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('starts with every top-level section collapsed', () => {
+  it('renders Appearance as always expanded and other sections as collapsed by default', () => {
     renderSettingsPage();
 
+    expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Appearance' })).not.toBeInTheDocument();
+    expect(screen.getByText('Light Mode')).toBeInTheDocument();
+
     for (const name of [
-      'Appearance',
       /Data Storage/,
       'AI Provider Credentials',
-      'Web Search',
       'Agent Models',
       'Chat Assistant Model',
+      'Web Search',
     ]) {
       expect(screen.getByRole('button', { name })).toHaveAttribute(
         'aria-expanded',
@@ -129,7 +132,7 @@ describe('SettingsPage', () => {
       'true',
     );
     expect(screen.getByText('Web search panel content')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Appearance' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Data Storage/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     );

@@ -72,12 +72,11 @@ import type {
 import { cn } from "@/lib/utils";
 
 type SettingsSectionKey =
-	| "appearance"
 	| "data-storage"
 	| "ai-provider"
 	| "agent-models"
-	| "web-search"
-	| "chat-model";
+	| "chat-model"
+	| "web-search";
 
 type SettingsSectionProps = {
 	headingId: string;
@@ -135,12 +134,11 @@ export function SettingsPage() {
 	const [expandedSections, setExpandedSections] = useState<
 		Record<SettingsSectionKey, boolean>
 	>({
-		appearance: false,
 		"data-storage": false,
 		"ai-provider": false,
 		"agent-models": false,
-		"web-search": false,
 		"chat-model": false,
+		"web-search": false,
 	});
 	const location = useLocation();
 
@@ -294,67 +292,65 @@ export function SettingsPage() {
 				</div>
 
 				{/* Section 1: Appearance & Theme */}
-				<SettingsSection
-					headingId="appearance-heading"
-					contentId="appearance-content"
-					title={
-						<span className="flex items-center gap-2">
-							<Palette
-								aria-hidden="true"
-								className="h-5 w-5 text-[#ffb74d]"
-							/>
-							Appearance
-						</span>
-					}
-					isExpanded={expandedSections.appearance}
-					onToggle={() => toggleSection("appearance")}
-				>
-					<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-						{themes.map((t) => {
-							const isSelected = theme === t.id;
-							const Icon = t.icon;
+				<section className="space-y-4" aria-labelledby="appearance-heading">
+					<h2
+						id="appearance-heading"
+						className="text-lg font-semibold tracking-tight border-b pb-2 flex items-center gap-2"
+					>
+						<Palette
+							aria-hidden="true"
+							className="h-5 w-5 text-[#ffb74d]"
+						/>
+						Appearance
+					</h2>
+					<div id="appearance-content">
+						<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+							{themes.map((t) => {
+								const isSelected = theme === t.id;
+								const Icon = t.icon;
 
-							return (
-								<motion.button
-									key={t.id}
-									onClick={() => setTheme(t.id)}
-									whileHover={{ scale: 1.02, y: -2 }}
-									whileTap={{ scale: 0.98 }}
-									transition={{ type: "spring", stiffness: 400, damping: 30 }}
-									className={cn(
-										"relative text-left p-4 rounded-xl border flex flex-col justify-between transition-all duration-200 shadow-sm cursor-pointer h-full min-h-[140px]",
-										"bg-card border-border backdrop-blur-md",
-										isSelected
-											? "border-[#ffb74d] ring-1 ring-[#ffb74d] shadow-md shadow-[#ffb74d]/5 bg-[#ffb74d]/5"
-											: t.glow,
-										"focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffb74d]",
-									)}
-								>
-									<div className="flex items-start justify-between w-full mb-3">
-										<div className={cn("p-2 rounded-lg shrink-0", t.color)}>
-											<Icon className="h-5 w-5" />
-										</div>
-										{isSelected && (
-											<motion.div
-												initial={{ scale: 0 }}
-												animate={{ scale: 1 }}
-												className="h-5 w-5 rounded-full bg-[#ffb74d] flex items-center justify-center text-black shrink-0"
-											>
-												<Check className="h-3 w-3 stroke-[3]" />
-											</motion.div>
+								return (
+									<motion.button
+										key={t.id}
+										onClick={() => setTheme(t.id)}
+										whileHover={{ scale: 1.02, y: -2 }}
+										whileTap={{ scale: 0.98 }}
+										transition={{ type: "spring", stiffness: 400, damping: 30 }}
+										className={cn(
+											"relative text-left p-4 rounded-xl border flex flex-col justify-between transition-all duration-200 shadow-sm cursor-pointer h-full min-h-[140px]",
+											"bg-card border-border backdrop-blur-md",
+											isSelected
+												? "border-[#ffb74d] ring-1 ring-[#ffb74d] shadow-md shadow-[#ffb74d]/5 bg-[#ffb74d]/5"
+												: t.glow,
+											"focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ffb74d]",
 										)}
-									</div>
-									<div>
-										<h3 className="font-semibold text-sm mb-1">{t.name}</h3>
-										<p className="text-xs text-muted-foreground leading-normal">
-											{t.description}
-										</p>
-									</div>
-								</motion.button>
-							);
-						})}
+									>
+										<div className="flex items-start justify-between w-full mb-3">
+											<div className={cn("p-2 rounded-lg shrink-0", t.color)}>
+												<Icon className="h-5 w-5" />
+											</div>
+											{isSelected && (
+												<motion.div
+													initial={{ scale: 0 }}
+													animate={{ scale: 1 }}
+													className="h-5 w-5 rounded-full bg-[#ffb74d] flex items-center justify-center text-black shrink-0"
+												>
+													<Check className="h-3 w-3 stroke-[3]" />
+												</motion.div>
+											)}
+										</div>
+										<div>
+											<h3 className="font-semibold text-sm mb-1">{t.name}</h3>
+											<p className="text-xs text-muted-foreground leading-normal">
+												{t.description}
+											</p>
+										</div>
+									</motion.button>
+								);
+							})}
+						</div>
 					</div>
-				</SettingsSection>
+				</section>
 
 				{/* Section 2: Data Storage */}
 				<SettingsSection
@@ -377,7 +373,7 @@ export function SettingsPage() {
 					</div>
 				</SettingsSection>
 
-				{/* Section 3: AI Provider configurations */}
+				{/* Section 3: AI Provider credentials */}
 				<SettingsSection
 					headingId="ai-provider-heading"
 					contentId="ai-provider-content"
@@ -403,7 +399,7 @@ export function SettingsPage() {
 					</div>
 				</SettingsSection>
 
-				{/* Section 3: Agent Models */}
+				{/* Section 4: Agent Models */}
 				<SettingsSection
 					headingId="agent-models-heading"
 					contentId="agent-models-content"
@@ -418,27 +414,6 @@ export function SettingsPage() {
 				>
 					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
 						<AgentModelsPanel />
-					</div>
-				</SettingsSection>
-
-				{/* Section 4: Web Search */}
-				<SettingsSection
-					headingId="web-search-heading"
-					contentId="web-search-content"
-					title={
-						<span className="flex items-center gap-2">
-							<Globe
-								aria-hidden="true"
-								className="h-5 w-5 text-[#ffb74d]"
-							/>
-							Web Search
-						</span>
-					}
-					isExpanded={expandedSections["web-search"]}
-					onToggle={() => toggleSection("web-search")}
-				>
-					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-						<WebSearchSettingsPanel />
 					</div>
 				</SettingsSection>
 
@@ -489,6 +464,27 @@ export function SettingsPage() {
 								/>
 							</div>
 						)}
+					</div>
+				</SettingsSection>
+
+				{/* Section 6: Web Search */}
+				<SettingsSection
+					headingId="web-search-heading"
+					contentId="web-search-content"
+					title={
+						<span className="flex items-center gap-2">
+							<Globe
+								aria-hidden="true"
+								className="h-5 w-5 text-[#ffb74d]"
+							/>
+							Web Search
+						</span>
+					}
+					isExpanded={expandedSections["web-search"]}
+					onToggle={() => toggleSection("web-search")}
+				>
+					<div className="bg-card border border-border p-6 rounded-xl shadow-sm">
+						<WebSearchSettingsPanel />
 					</div>
 				</SettingsSection>
 			</main>
