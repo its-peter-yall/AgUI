@@ -23,8 +23,8 @@
  * ============================================================================
  */
 
-import { describe, it, expect } from "vitest";
-import { preprocessMermaid } from "./mermaidUtils";
+import { describe, it, expect, vi } from "vitest";
+import { preprocessMermaid, downloadMermaidAsPng } from "./mermaidUtils";
 
 describe("preprocessMermaid", () => {
 	it("should clean up nested double quotes inside node labels", () => {
@@ -50,3 +50,23 @@ describe("preprocessMermaid", () => {
 		expect(preprocessMermaid(input)).toBe(expected);
 	});
 });
+
+describe("downloadMermaidAsPng", () => {
+	it("should return early when svgString is empty", () => {
+		expect(() => downloadMermaidAsPng("")).not.toThrow();
+	});
+
+	it("should parse SVG element and attempt image export without throwing", () => {
+		const sampleSvg = '<svg viewBox="0 0 100 100"><rect width="100" height="100"/></svg>';
+		
+		// Mock URL methods
+		const createObjectURLMock = vi.fn().mockReturnValue("blob:http://localhost/test");
+		const revokeObjectURLMock = vi.fn();
+		global.URL.createObjectURL = createObjectURLMock;
+		global.URL.revokeObjectURL = revokeObjectURLMock;
+
+		expect(() => downloadMermaidAsPng(sampleSvg, "test-diagram.png")).not.toThrow();
+		expect(createObjectURLMock).toHaveBeenCalled();
+	});
+});
+

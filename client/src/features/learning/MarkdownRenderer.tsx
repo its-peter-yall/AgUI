@@ -48,12 +48,12 @@ import rehypeExternalLinks from "rehype-external-links";
 import React, { useState, useEffect, useRef, useId, useMemo } from "react";
 import { createPortal } from "react-dom";
 import "katex/dist/katex.min.css";
-import { MessageCircle, Copy, Check, X } from "lucide-react";
+import { MessageCircle, Copy, Check, X, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import mermaid from "mermaid";
-import { preprocessMermaid } from "./mermaidUtils";
+import { preprocessMermaid, downloadMermaidAsPng } from "./mermaidUtils";
 
 // Initialize mermaid for light mode
 if (typeof window !== "undefined") {
@@ -216,17 +216,40 @@ export function Mermaid({ chart }: MermaidProps) {
 						className="relative w-full max-w-4xl md:max-w-5xl max-h-[90vh] bg-zinc-50 border border-zinc-200 rounded-2xl p-6 md:p-8 shadow-2xl flex items-center justify-center overflow-auto cursor-zoom-out animate-in zoom-in-95 duration-200 text-zinc-900"
 						onClick={() => setIsZoomed(false)}
 					>
-						<button
-							type="button"
-							className="absolute top-4 right-4 p-2 rounded-full bg-zinc-200/80 hover:bg-zinc-300 text-zinc-600 hover:text-zinc-800 transition-colors cursor-pointer focus:outline-none z-10"
-							onClick={() => setIsZoomed(false)}
-							aria-label="Close diagram"
-						>
-							<X className="h-5 w-5" />
-						</button>
+						<div className="absolute top-4 right-4 flex items-center gap-2 z-10">
+							<button
+								type="button"
+								className="p-2 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-600 border border-red-500/30 transition-colors cursor-pointer focus:outline-none"
+								onClick={(e) => {
+									e.stopPropagation();
+									downloadMermaidAsPng(svg);
+								}}
+								aria-label="Download diagram as PNG"
+								title="Download PNG"
+							>
+								<Download className="h-5 w-5" />
+							</button>
+							<button
+								type="button"
+								className="p-2 rounded-full bg-zinc-200/80 hover:bg-zinc-300 text-zinc-600 hover:text-zinc-800 transition-colors cursor-pointer focus:outline-none"
+								onClick={(e) => {
+									e.stopPropagation();
+									setIsZoomed(false);
+								}}
+								aria-label="Close diagram"
+								title="Close"
+							>
+								<X className="h-5 w-5" />
+							</button>
+						</div>
 						<div 
-							className="mermaid-zoomed-container flex justify-center w-full" 
+							className="mermaid-zoomed-container flex justify-center w-full cursor-pointer" 
 							dangerouslySetInnerHTML={{ __html: svg }} 
+							onClick={(e) => {
+								e.stopPropagation();
+								downloadMermaidAsPng(svg);
+							}}
+							title="Click diagram to download PNG"
 						/>
 					</div>
 				</div>,
