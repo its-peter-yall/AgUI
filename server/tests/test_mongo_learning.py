@@ -338,7 +338,26 @@ class MongoLearningTests(unittest.TestCase):
             session=txn_session,
         )
 
+    def test_replace_node_content_clears_error_fields(self) -> None:
+        nodes = self.database["concept_nodes"]
+        nodes.find_one.return_value = {"_id": "n1", "status": "failed"}
+        self.repository.replace_node_content(
+            node_id="n1",
+            content_markdown="# New Content",
+            status=NodeStatus.COMPLETED,
+        )
+        nodes.update_one.assert_called_once()
+        update_args = nodes.update_one.call_args.args
+        self.assertEqual(update_args[0], {"_id": "n1"})
+        set_dict = update_args[1].get("$set", {})
+        self.assertEqual(set_dict["content_markdown"], "# New Content")
+        self.assertEqual(set_dict["status"], NodeStatus.COMPLETED.value)
+        self.assertIsNone(set_dict["error_message"])
+        self.assertIsNone(set_dict["failed_step"])
+        self.assertNotIn("$unset", update_args[1])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

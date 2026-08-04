@@ -656,21 +656,6 @@ class MongoLearningRepository:
                     "failed_step": None,
                     "updated_at": now,
                 },
-                "$unset": {
-                    "error_message": "",
-                    "failed_step": "",
-                },
-            },
-        )
-        # Re-apply null clears after unset so API shape stays consistent.
-        self._nodes.update_one(
-            {"_id": node_id},
-            {
-                "$set": {
-                    "error_message": None,
-                    "retry_available": False,
-                    "failed_step": None,
-                }
             },
         )
         if quiz_set is not None:
