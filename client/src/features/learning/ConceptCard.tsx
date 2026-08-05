@@ -51,7 +51,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { ChevronLeft, RefreshCw, List, BookOpen } from "lucide-react";
+import { ChevronLeft, RefreshCw, List, BookOpen, Download } from "lucide-react";
 import type {
 	ConceptNode,
 	NodeStatus,
@@ -65,6 +65,7 @@ import {
 	areAgentModelsConfigured,
 	getProviderSettings,
 } from "@/lib/providerSettings";
+import { exportConceptAsPdf } from "./pdfExportUtils";
 import { MarkdownRenderer, InlineMarkdown } from "./MarkdownRenderer";
 import { QuizFeedback } from "./QuizFeedback";
 import { useQuizFeedback } from "./useQuizFeedback";
@@ -275,6 +276,27 @@ export function ConceptCard({
 		ERROR: "!",
 	};
 
+	const cardContentRef = useRef<HTMLDivElement>(null);
+	const [isExportingPdf, setIsExportingPdf] = useState(false);
+	const isUnlocked = node.status !== "LOCKED";
+
+	const handleDownloadPdf = async () => {
+		if (!isUnlocked || isExportingPdf || !cardContentRef.current) return;
+		try {
+			setIsExportingPdf(true);
+			await exportConceptAsPdf(
+				node.title,
+				cardContentRef.current,
+				node.sequence_index,
+				node.complexity,
+			);
+		} catch (err) {
+			console.error("Failed to export concept PDF:", err);
+		} finally {
+			setIsExportingPdf(false);
+		}
+	};
+
 	// Show refresh for in-progress and ERROR (M12 per-card regen).
 	const showRefreshButton =
 		node.status === "VIEWING_EXPLANATION" ||
@@ -371,6 +393,22 @@ export function ConceptCard({
 							</span>
 						</div>
 						<div className="flex items-center gap-2">
+							{isUnlocked && (
+								<button
+									type="button"
+									onClick={handleDownloadPdf}
+									disabled={isExportingPdf}
+									title="Download concept content as PDF"
+									aria-label="Download concept content as PDF"
+									className={cn(
+										"p-2 rounded-md text-muted-foreground hover:bg-primary/20 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-xs font-medium border border-border/60 bg-card/80",
+										isExportingPdf && "opacity-70 cursor-wait",
+									)}
+								>
+									<Download className={cn("w-4 h-4", isExportingPdf && "animate-bounce")} />
+									<span className="hidden sm:inline">PDF</span>
+								</button>
+							)}
 							{onOpenTOC && (
 								<button
 									type="button"
@@ -410,7 +448,7 @@ export function ConceptCard({
 
 					{/* Card Body - State-based content */}
 					<ContentTransition contentKey={`${node.id}-${node.status}-${isRegeneratingLocal}-${showRegenConfirm}-${!!localError}`}>
-						<div className="p-4 relative">
+						<div className="p-4 relative" ref={cardContentRef}>
 							{/* Confirmation dialog overlay */}
 							{showRegenConfirm && (
 								<div className="absolute inset-0 bg-background/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-6 text-center">

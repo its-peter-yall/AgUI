@@ -52,7 +52,11 @@ export function OpenRouterSettingsPanel() {
   // Get OpenRouter models from cache to check if the active model supports thinking
   const { data: orModels } = useQuery<ProviderModel[], ProviderApiError>({
     queryKey: ['provider-models', 'openrouter', settings.providers.openrouter.apiKey],
+    queryFn: () =>
+      getProviderModels('openrouter', settings.providers.openrouter.apiKey),
     enabled: settings.providers.openrouter.apiKey.trim().length > 0,
+    staleTime: 1000 * 60 * 60 * 24,
+    retry: false,
   });
 
   const activeModelSupportsThinking = useMemo(() => {
