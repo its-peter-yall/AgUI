@@ -56,25 +56,27 @@ const mockNodeWithQuizSet: ConceptNode = {
 	error_message: null,
 	retry_available: false,
 	complexity: "Basic",
+	created_at: "2026-08-01T00:00:00Z",
+	updated_at: "2026-08-01T00:00:00Z",
 	quiz: null,
 	quiz_set: {
 		quizzes: [
 			{
-				id: "q1",
 				question_text: "What is an entity?",
 				question_type: "single_choice",
+				difficulty: "easy",
 				options: [
-					{ option_id: "opt-1", text: "A node", display_label: "A", explanation: "Correct" },
-					{ option_id: "opt-2", text: "A line", display_label: "B", explanation: "Incorrect" },
+					{ option_id: "opt-1", text: "A node", display_label: "A", explanation: "Correct", is_correct: true },
+					{ option_id: "opt-2", text: "A line", display_label: "B", explanation: "Incorrect", is_correct: false },
 				],
 			},
 			{
-				id: "q2",
 				question_text: "What is a relation?",
 				question_type: "single_choice",
+				difficulty: "easy",
 				options: [
-					{ option_id: "opt-3", text: "An edge", display_label: "A", explanation: "Correct" },
-					{ option_id: "opt-4", text: "A vertex", display_label: "B", explanation: "Incorrect" },
+					{ option_id: "opt-3", text: "An edge", display_label: "A", explanation: "Correct", is_correct: true },
+					{ option_id: "opt-4", text: "A vertex", display_label: "B", explanation: "Incorrect", is_correct: false },
 				],
 			},
 		],
@@ -82,12 +84,17 @@ const mockNodeWithQuizSet: ConceptNode = {
 		shuffle_seed: null,
 	},
 	quiz_hidden: null,
+	quiz_set_hidden: null,
 };
 
 const mockOriginalSession: LearningSessionWithNodes = {
 	id: "session-1",
+	query: "Knowledge Graphs",
 	course_title: "Mastering Knowledge Graphs",
 	user_id: "user-1",
+	total_nodes: 1,
+	completed_nodes: 1,
+	last_active_node_id: "node-1",
 	created_at: "2026-08-01T00:00:00Z",
 	updated_at: "2026-08-01T00:00:00Z",
 	nodes: [mockNodeWithQuizSet],
@@ -95,16 +102,17 @@ const mockOriginalSession: LearningSessionWithNodes = {
 
 const mockRevisionSession: RevisionSessionWithProgress = {
 	id: "rev-1",
-	learning_session_id: "session-1",
+	original_session_id: "session-1",
 	mode: "full_review",
 	status: "in_progress",
 	revision_number: 1,
+	progress_percent: 0,
+	total_quiz_score_percent: null,
 	started_at: "2026-08-06T00:00:00Z",
 	completed_at: null,
 	nodes: [
 		{
 			id: "rev-node-1",
-			revision_session_id: "rev-1",
 			node_id: "node-1",
 			node_title: "Knowledge Graphs 101",
 			sequence_index: 0,

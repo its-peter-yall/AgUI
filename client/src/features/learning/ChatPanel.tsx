@@ -48,8 +48,8 @@ interface ChatPanelProps {
 	onClose: () => void;
 	sessionId: string;
 	nodeId: string;
-	selectedHeadingIds: string[];
-	onClearHeadings: () => void;
+	selectedHeadingIds?: string[];
+	onClearHeadings?: () => void;
 	isCourseComplete?: boolean;
 	/** Width of the panel in percentage (32-40) */
 	widthPercent?: number;
@@ -72,8 +72,8 @@ export function ChatPanel({
 	onClose,
 	sessionId,
 	nodeId,
-	selectedHeadingIds,
-	onClearHeadings,
+	selectedHeadingIds = [],
+	onClearHeadings = () => {},
 	isCourseComplete = false,
 	widthPercent = 25,
 	prefillMessage,

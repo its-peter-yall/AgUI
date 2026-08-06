@@ -276,17 +276,17 @@ export function ConceptCard({
 		ERROR: "!",
 	};
 
-	const cardContentRef = useRef<HTMLDivElement>(null);
 	const [isExportingPdf, setIsExportingPdf] = useState(false);
 	const isUnlocked = node.status !== "LOCKED";
 
 	const handleDownloadPdf = async () => {
-		if (!isUnlocked || isExportingPdf || !cardContentRef.current) return;
+		const markdown = node.content_markdown;
+		if (!isUnlocked || isExportingPdf || !markdown?.trim()) return;
 		try {
 			setIsExportingPdf(true);
 			await exportConceptAsPdf(
 				node.title,
-				cardContentRef.current,
+				markdown,
 				node.sequence_index,
 				node.complexity,
 			);
@@ -448,7 +448,7 @@ export function ConceptCard({
 
 					{/* Card Body - State-based content */}
 					<ContentTransition contentKey={`${node.id}-${node.status}-${isRegeneratingLocal}-${showRegenConfirm}-${!!localError}`}>
-						<div className="p-4 relative" ref={cardContentRef}>
+						<div className="p-4 relative">
 							{/* Confirmation dialog overlay */}
 							{showRegenConfirm && (
 								<div className="absolute inset-0 bg-background/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-6 text-center">

@@ -292,8 +292,6 @@ export function RevisionPage() {
 			n.status === "quiz_passed" ||
 			n.status === "quiz_failed",
 	).length;
-	const progressPercent =
-		totalNodes > 0 ? Math.floor((completedNodes / totalNodes) * 100) : 0;
 
 	const currentNode = originalSession.nodes[currentIndex];
 	const currentRevisionProgress = currentNode
@@ -504,7 +502,7 @@ export function RevisionPage() {
 						progress?.status === "reviewed" || progress?.status === "quiz_passed";
 					return {
 						...node,
-						status: isDone ? ("COMPLETED" as const) : ("AVAILABLE" as const),
+						status: isDone ? ("COMPLETED" as const) : ("VIEWING_EXPLANATION" as const),
 					};
 				})}
 				currentNodeId={currentNode?.id}
@@ -530,20 +528,4 @@ export function RevisionPage() {
 			)}
 		</div>
 	);
-}
-
-/**
- * Get step indicator color for revision node status.
- */
-function getRevisionStepColor(status?: string): string {
-	switch (status) {
-		case "reviewed":
-		case "quiz_passed":
-			return "bg-green-500";
-		case "quiz_failed":
-			return "bg-red-500";
-		case "pending":
-		default:
-			return "bg-muted-foreground/30";
-	}
 }

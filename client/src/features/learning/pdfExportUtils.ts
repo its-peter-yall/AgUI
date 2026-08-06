@@ -5,35 +5,96 @@
  * ============================================================================
  *
  * PURPOSE:
- *    Generates and triggers download of styled PDFs and ZIP course archives
- *    for course concept modules.
+ *    Markdown-first PDF/ZIP export for course concept modules. Strips curiosity
+ *    sections, inlines Mermaid SVGs, renders a light-theme print DOM, then
+ *    captures via html2canvas-pro + jsPDF multipage (or packages ZIP).
  *
  * ROLE IN PROJECT:
- *    Utility within learning feature to render Markdown text, KaTeX formulas,
- *    and Mermaid diagrams into downloadable PDFs and full-course ZIP packages.
+ *    Utility within learning feature. ConceptCard downloads single PDFs from
+ *    content_markdown; CourseCard downloads full-course ZIP archives.
  *
  * KEY COMPONENTS:
- *    - sanitizeFilename: Cleans titles into safe PDF/ZIP filenames
- *    - exportConceptAsPdf: Exports a single concept card as PDF
- *    - exportCourseAsZip: Exports all concept modules of a completed course as a ZIP
+ *    - sanitizeFilename: Safe PDF/ZIP filenames from titles
+ *    - stripCuriosityFromMarkdown: Drop curiosity section via parser
+ *    - renderMermaidFencesInMarkdown: ```mermaid → inline figure+svg
+ *    - exportConceptAsPdf / exportConceptAsPdfBlob: Single-module PDF
+ *    - exportCourseAsZip: All modules as numbered PDFs in a ZIP
  *
  * DEPENDENCIES:
- *    - External: html2canvas-pro, jspdf, jszip, react-dom/client, react
- *    - Internal: @/lib/learningApi, ./MarkdownRenderer
+ *    - External: html2canvas-pro, jspdf, jszip, mermaid, react, react-dom/client,
+ *                react-markdown, remark-gfm, remark-math, rehype-katex, rehype-raw
+ *    - Internal: @/lib/learningApi, ./curiosityParser, ./mermaidUtils
  *
  * USAGE:
  *    import { exportConceptAsPdf, exportCourseAsZip } from "./pdfExportUtils";
- *    await exportConceptAsPdf(title, element, sequenceIndex, complexity);
+ *    await exportConceptAsPdf(title, markdown, sequenceIndex, complexity);
  *    await exportCourseAsZip(sessionId, courseTitle);
  * ============================================================================
  */
 import html2canvas from "html2canvas-pro";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
+import mermaid from "mermaid";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 import { getLearningSession } from "@/lib/learningApi";
-import { MarkdownRenderer } from "./MarkdownRenderer";
+import { parseCuriosityQuestions } from "./curiosityParser";
+import { preprocessMermaid } from "./mermaidUtils";
+import { renderVectorPlotSvg } from "./vectorPlotUtils";
+
+function ensureMermaidLightTheme(): void {
+	if (typeof window === "undefined") return;
+	// Re-init each export batch — iframe / multi-call safety
+	mermaid.initialize({
+		startOnLoad: false,
+		theme: "default",
+		securityLevel: "loose",
+		themeVariables: {
+			background: "#fafafa",
+			primaryColor: "#ffb74d",
+			primaryTextColor: "#18181b",
+			lineColor: "#ffb74d",
+			textColor: "#18181b",
+		},
+	});
+}
+
+/**
+ * Parent-document measure root with real layout metrics.
+ * Mermaid getBBox fails inside height:0 / visibility:hidden iframes.
+ */
+function createMermaidMeasureHost(): { host: HTMLElement; cleanup: () => void } {
+	const host = document.createElement("div");
+	host.setAttribute("data-pdf-mermaid-measure", "true");
+	host.style.cssText = [
+		"position:fixed",
+		"left:0",
+		"top:0",
+		"width:800px",
+		"height:600px",
+		"opacity:0",
+		"pointer-events:none",
+		"z-index:-1",
+		"overflow:hidden",
+	].join(";");
+	document.body.appendChild(host);
+	return {
+		host,
+		cleanup: () => {
+			if (host.parentNode) host.parentNode.removeChild(host);
+			// Mermaid leaves temp nodes (#d{id}) on body
+			document
+				.querySelectorAll("[id^='dpdfmmd'], [id^='pdfmmd']")
+				.forEach((el) => el.remove());
+		},
+	};
+}
 
 /**
  * Sanitizes a concept title for use as a valid PDF or ZIP filename.
@@ -56,8 +117,89 @@ export function sanitizeFilename(title: string): string {
 }
 
 /**
- * Pre-processes SVG diagrams inside an element before canvas/PDF capture
- * to preserve crisp text colors, correct font styles, and explicit sizing.
+ * Removes curiosity / spark sections from markdown source before export.
+ */
+export function stripCuriosityFromMarkdown(markdown: string): string {
+	if (!markdown) return "";
+	return parseCuriosityQuestions(markdown).mainContent;
+}
+
+/**
+ * Replaces ```mermaid and ```vector-plot fences with inline figures/SVGs.
+ * Mermaid measures on a parent-document host (real layout). Never loading placeholders.
+ */
+export async function renderMermaidFencesInMarkdown(
+	markdown: string,
+	options?: { measureHost?: HTMLElement },
+): Promise<string> {
+	if (!markdown) return "";
+
+	// mermaid | vector-plot | vector_plot
+	const fenceRegex = /```\s*(mermaid|vector-plot|vector_plot)[^\n]*\r?\n([\s\S]*?)```/gi;
+	const matches = Array.from(markdown.matchAll(fenceRegex));
+	if (matches.length === 0) return markdown;
+
+	ensureMermaidLightTheme();
+
+	// Prefer caller host; else create parent measure root with real box metrics
+	const owned = options?.measureHost
+		? null
+		: createMermaidMeasureHost();
+	const measureHost = options?.measureHost ?? owned!.host;
+
+	let result = "";
+	let lastIndex = 0;
+	let diagramIndex = 0;
+
+	try {
+		for (const match of matches) {
+			const matchIndex = match.index ?? 0;
+			result += markdown.slice(lastIndex, matchIndex);
+			const lang = (match[1] || "").toLowerCase().replace("_", "-");
+			const body = (match[2] ?? "").trim();
+
+			if (lang === "vector-plot") {
+				const svg = renderVectorPlotSvg(body);
+				if (svg) {
+					result += `<figure class="pdf-diagram pdf-vector-diagram">${svg}</figure>`;
+				} else {
+					result +=
+						'<pre class="pdf-diagram-error">Vector plot failed to render.</pre>';
+				}
+			} else {
+				// mermaid — id must be valid CSS/DOM id (no dots from random alone is fine)
+				const uniqueId = `pdfmmd${Date.now()}${diagramIndex++}${Math.random().toString(36).slice(2, 8)}`;
+				try {
+					const preprocessed = preprocessMermaid(body);
+					// Always pass measure host so layout uses a real 800×600 box
+					const { svg } = await mermaid.render(
+						uniqueId,
+						preprocessed,
+						measureHost,
+					);
+					// Clear measure host between diagrams (mermaid injects temp DOM)
+					measureHost.innerHTML = "";
+					result += `<figure class="pdf-diagram">${svg}</figure>`;
+				} catch (err) {
+					console.warn("[pdfExport] Mermaid render failed:", err);
+					measureHost.innerHTML = "";
+					result +=
+						'<pre class="pdf-diagram-error">Diagram failed to render.</pre>';
+				}
+			}
+
+			lastIndex = matchIndex + match[0].length;
+		}
+
+		result += markdown.slice(lastIndex);
+		return result;
+	} finally {
+		owned?.cleanup();
+	}
+}
+
+/**
+ * Pre-processes SVG diagrams inside an element before canvas/PDF capture.
  */
 function prepareSvgsForPdf(container: HTMLElement): void {
 	const svgs = Array.from(container.querySelectorAll("svg"));
@@ -88,13 +230,12 @@ function prepareSvgsForPdf(container: HTMLElement): void {
 		svg.setAttribute("width", String(width));
 		svg.setAttribute("height", String(height));
 
-		// Ensure SVG displays in standard block flow without absolute positioning overlap
 		svg.style.position = "static";
 		svg.style.display = "block";
-		svg.style.margin = "0 auto";
+		svg.style.margin = "0"; // left-aligned
 		svg.style.maxWidth = "100%";
+		svg.style.height = "auto";
 
-		// Inject light theme styling override for Mermaid text in export
 		const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
 		style.textContent = `
 			text, tspan, span, div, p {
@@ -107,341 +248,280 @@ function prepareSvgsForPdf(container: HTMLElement): void {
 	});
 }
 
+const EXPORT_HOST_STYLES = `
+	.pdf-export-wrapper {
+		background-color: #ffffff !important;
+		color: #18181b !important;
+	}
+	.pdf-export-wrapper * {
+		box-sizing: border-box !important;
+	}
+	.pdf-export-wrapper p, .pdf-export-wrapper li, .pdf-export-wrapper span,
+	.pdf-export-wrapper td, .pdf-export-wrapper th {
+		color: #18181b !important;
+		line-height: 1.6 !important;
+	}
+	.pdf-export-wrapper h1, .pdf-export-wrapper h2, .pdf-export-wrapper h3,
+	.pdf-export-wrapper h4, .pdf-export-wrapper h5, .pdf-export-wrapper h6 {
+		color: #09090b !important;
+		font-weight: 700 !important;
+	}
+	.pdf-export-wrapper pre,
+	.pdf-export-wrapper code {
+		background-color: #f4f4f5 !important;
+		background-image: none !important;
+		border: 1px solid #e4e4e7 !important;
+		border-radius: 8px !important;
+		color: #09090b !important;
+		font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace !important;
+		text-shadow: none !important;
+	}
+	.pdf-export-wrapper pre {
+		padding: 12px !important;
+		margin: 12px 0 !important;
+		overflow-x: auto !important;
+	}
+	.pdf-export-wrapper pre code {
+		background-color: transparent !important;
+		border: none !important;
+		padding: 0 !important;
+	}
+	.pdf-export-wrapper :not(pre) > code {
+		padding: 2px 6px !important;
+	}
+	.pdf-export-wrapper .katex,
+	.pdf-export-wrapper .katex-html {
+		color: #09090b !important;
+		font-size: 1.05em !important;
+	}
+	.pdf-export-wrapper .katex-mathml {
+		display: none !important;
+	}
+	.pdf-export-wrapper table {
+		border-collapse: collapse !important;
+		width: 100% !important;
+		margin: 16px 0 !important;
+	}
+	.pdf-export-wrapper th, .pdf-export-wrapper td {
+		border: 1px solid #e4e4e7 !important;
+		padding: 8px 12px !important;
+		color: #18181b !important;
+	}
+	.pdf-export-wrapper th {
+		background-color: #f4f4f5 !important;
+		font-weight: 700 !important;
+	}
+	.pdf-export-wrapper strong {
+		color: #09090b !important;
+		font-weight: 700 !important;
+	}
+	.pdf-export-wrapper .pdf-diagram {
+		display: block !important;
+		margin: 16px 0 !important;
+		text-align: left !important;
+		page-break-inside: avoid !important;
+		break-inside: avoid !important;
+	}
+	.pdf-export-wrapper .pdf-diagram svg,
+	.pdf-export-wrapper .pdf-vector-plot {
+		display: block !important;
+		margin: 0 !important;
+		max-width: 100% !important;
+		height: auto !important;
+	}
+	.pdf-export-wrapper .pdf-diagram-error {
+		color: #b91c1c !important;
+		background-color: #fef2f2 !important;
+		border-color: #fecaca !important;
+	}
+	.pdf-export-wrapper .pdf-print-body {
+		color: #18181b !important;
+	}
+`;
+
+type ExportSandbox = {
+	iframe: HTMLIFrameElement;
+	doc: Document;
+	host: HTMLElement;
+	cleanup: () => void;
+};
+
 /**
- * Completely strips the CuriositySpark ('Curious to explore more?') section from export DOM
- * without deleting parent content containers.
- *
- * Never uses broad selectors like `.border` / `.rounded-lg` — those match the concept
- * card wrapper and wipe the entire body (header-only blank PDFs).
+ * Isolated iframe sandbox — html2canvas never touches main document layout.
+ * Fixes host-page text bold/unbold flicker from windowWidth reflow + body host.
  */
-export function stripCuriositySpark(container: HTMLElement): void {
-	container.querySelectorAll(".curiosity-spark").forEach((el) => el.remove());
+async function createExportSandbox(): Promise<ExportSandbox> {
+	const iframe = document.createElement("iframe");
+	iframe.setAttribute("aria-hidden", "true");
+	iframe.setAttribute("tabindex", "-1");
+	iframe.setAttribute("title", "pdf-export-sandbox");
+	// Invisible but real size — height:0/visibility:hidden breaks layout metrics.
+	// opacity:0 keeps main page free of flicker without collapsing iframe layout.
+	iframe.style.cssText = [
+		"position:fixed",
+		"left:0",
+		"top:0",
+		"width:800px",
+		"height:10000px",
+		"border:0",
+		"margin:0",
+		"padding:0",
+		"opacity:0",
+		"pointer-events:none",
+		"z-index:-1",
+		"overflow:hidden",
+	].join(";");
+	document.body.appendChild(iframe);
 
-	// Prefer className string checks — Tailwind `/` classes are unreliable in querySelector
-	const isCuriosityBox = (node: HTMLElement): boolean => {
-		if (node === container) return false;
-		if (node.classList.contains("curiosity-spark")) return true;
-		const cls = typeof node.className === "string" ? node.className : "";
-		return cls.includes("border-primary/20") || cls.includes("bg-primary/5");
-	};
-
-	// Headings/labels only — never match bulk `div` wrappers whose textContent
-	// inherits the curiosity phrase (that path deleted whole card bodies).
-	const markers = Array.from(
-		container.querySelectorAll("h1, h2, h3, h4, h5, h6, p, span, strong"),
-	);
-
-	markers.forEach((el) => {
-		if (!container.contains(el) || !el.textContent) return;
-		const text = el.textContent.trim().toLowerCase();
-		if (
-			!text.includes("curious to explore more") &&
-			!text.includes("curiosity spark")
-		) {
+	await new Promise<void>((resolve) => {
+		const done = () => resolve();
+		if (iframe.contentDocument?.readyState === "complete") {
+			done();
 			return;
 		}
-
-		let node: HTMLElement | null = el as HTMLElement;
-		while (node && node !== container) {
-			if (isCuriosityBox(node)) {
-				node.remove();
-				return;
-			}
-			node = node.parentElement;
-		}
-
-		// Markdown-embedded curiosity block: drop heading + following siblings
-		// until next heading. Do not climb to / remove parent containers.
-		if (!/^H[1-6]$/i.test(el.tagName)) return;
-
-		let next: Element | null = el.nextElementSibling;
-		while (next && !/^H[1-6]$/i.test(next.tagName) && container.contains(next)) {
-			const siblingToRemove = next;
-			next = next.nextElementSibling;
-			siblingToRemove.remove();
-		}
-		el.remove();
+		iframe.addEventListener("load", done, { once: true });
+		// jsdom / already-loaded
+		setTimeout(done, 0);
 	});
-}
 
+	const doc = iframe.contentDocument;
+	if (!doc) {
+		iframe.remove();
+		throw new Error("PDF export sandbox failed to initialize.");
+	}
 
-/**
- * Extracts Mermaid/SVG diagrams from inline text, places them in a dedicated 'Diagrams'
- * section at the bottom of the content container, and applies page-break avoidance styling.
- */
-export function moveDiagramsToDedicatedSection(container: HTMLElement): void {
-	// Target ONLY Mermaid diagram containers and vector plots
-	const diagramWrappers = Array.from(
-		container.querySelectorAll<HTMLElement>(".mermaid-wrapper, .mermaid, div[id^='mermaid-']"),
+	const baseHref =
+		typeof location !== "undefined" && location.href ? location.href : "";
+	doc.open();
+	doc.write(
+		`<!DOCTYPE html><html><head><base href="${baseHref.replace(/"/g, "")}"/></head><body style="margin:0;background:#ffffff;"></body></html>`,
 	);
+	doc.close();
 
-	const mermaidSvgs = Array.from(container.querySelectorAll("svg")).filter((svg) => {
-		const id = svg.getAttribute("id") || "";
-		const parentId = svg.parentElement?.getAttribute("id") || "";
-		return id.startsWith("mermaid") || parentId.startsWith("mermaid");
-	});
+	// Print styles only inside iframe — never inject into parent document
+	const styleTag = doc.createElement("style");
+	styleTag.textContent = EXPORT_HOST_STYLES;
+	doc.head.appendChild(styleTag);
 
-	const diagramContainers: HTMLElement[] = [];
-	const visited = new Set<Element>();
-
-	diagramWrappers.forEach((wrapper) => {
-		if (!visited.has(wrapper) && container.contains(wrapper)) {
-			visited.add(wrapper);
-			diagramContainers.push(wrapper);
-		}
-	});
-
-	mermaidSvgs.forEach((svg) => {
-		const wrapper = (svg.closest(".mermaid-wrapper, .mermaid") as HTMLElement) || svg;
-		if (!visited.has(wrapper) && container.contains(wrapper)) {
-			visited.add(wrapper);
-			diagramContainers.push(wrapper);
-		}
-	});
-
-	if (diagramContainers.length === 0) return;
-
-	diagramContainers.forEach((diag) => {
-		diag.remove();
-
-		// Clean positioning and display on diagram container to prevent overlap
-		diag.style.position = "relative";
-		diag.style.top = "0";
-		diag.style.left = "0";
-		diag.style.display = "block";
-		diag.style.clear = "both";
-		diag.style.pageBreakInside = "avoid";
-		diag.style.breakInside = "avoid";
-		diag.style.maxWidth = "100%";
-		diag.style.margin = "16px auto";
-		diag.style.overflow = "visible";
-
-		// Remove off-screen measurement divs inside wrapper
-		diag.querySelectorAll("div").forEach((childDiv) => {
-			if (childDiv.style.position === "absolute" || childDiv.style.top === "-9999px") {
-				childDiv.remove();
+	// KaTeX CSS lives on parent (vite import). Copy matching stylesheets into iframe.
+	document
+		.querySelectorAll('link[rel="stylesheet"], style')
+		.forEach((node) => {
+			if (node instanceof HTMLLinkElement) {
+				const href = node.href || "";
+				if (!/katex/i.test(href) && !/katex/i.test(node.getAttribute("href") || "")) {
+					return;
+				}
+				const link = doc.createElement("link");
+				link.rel = "stylesheet";
+				link.href = href;
+				doc.head.appendChild(link);
+			} else if (node instanceof HTMLStyleElement) {
+				const text = node.textContent || "";
+				if (!/katex|\.katex/i.test(text)) return;
+				const clone = doc.createElement("style");
+				clone.textContent = text;
+				doc.head.appendChild(clone);
 			}
 		});
 
-		// Ensure inner SVG is centered block element
-		const innerSvg = diag.querySelector("svg");
-		if (innerSvg) {
-			innerSvg.style.position = "static";
-			innerSvg.style.display = "block";
-			innerSvg.style.margin = "0 auto";
-			innerSvg.style.maxWidth = "100%";
-			innerSvg.style.height = "auto";
-		}
-	});
+	const host = doc.createElement("div");
+	host.className = "pdf-export-wrapper";
+	host.style.cssText = [
+		"width:800px",
+		"padding:32px",
+		"box-sizing:border-box",
+		"background-color:#ffffff",
+		"color:#18181b",
+		"font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+		"overflow:visible",
+	].join(";");
+	doc.body.appendChild(host);
 
-	const diagramsSection = document.createElement("div");
-	diagramsSection.className = "pdf-diagrams-section";
-	diagramsSection.style.marginTop = "32px";
-	diagramsSection.style.borderTop = "1px solid #e4e4e7";
-	diagramsSection.style.paddingTop = "24px";
-	diagramsSection.style.pageBreakBefore = "auto";
-
-	const sectionTitle = document.createElement("h2");
-	sectionTitle.style.fontSize = "18px";
-	sectionTitle.style.fontWeight = "700";
-	sectionTitle.style.color = "#18181b";
-	sectionTitle.style.marginBottom = "16px";
-	sectionTitle.textContent = "Diagrams";
-	diagramsSection.appendChild(sectionTitle);
-
-	diagramContainers.forEach((diag) => {
-		diagramsSection.appendChild(diag);
-	});
-
-	container.appendChild(diagramsSection);
+	return {
+		iframe,
+		doc,
+		host,
+		cleanup: () => {
+			if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+		},
+	};
 }
 
+type PrintCodeProps = {
+	className?: string;
+	children?: React.ReactNode;
+};
+
 /**
- * Strips non-content interactive UI buttons, mastery banners, and unwraps <details> tags.
+ * Light-theme markdown body for PDF — no SyntaxHighlighter / vscDarkPlus.
  */
-function stripInteractiveElements(container: HTMLElement): void {
-	// Remove all button elements (proceed to quiz, previous, chat icons, copy buttons, etc.)
-	container.querySelectorAll("button").forEach((btn) => btn.remove());
-
-	// Remove source citations action area if present
-	container.querySelectorAll(".source-citations").forEach((el) => el.remove());
-
-	// Remove "Topic mastered!" status banner
-	const masteryBanners = Array.from(container.querySelectorAll(".text-green-600, .text-green-400"));
-	masteryBanners.forEach((el) => {
-		if (el.textContent?.includes("Topic mastered")) {
-			const cardBox = el.closest(".flex.items-center");
-			if (cardBox && cardBox !== container && container.contains(cardBox)) {
-				cardBox.remove();
-			}
-		}
-	});
-
-	// Unwrap <details> tags (remove <summary> "Review explanation", keep inner markdown content)
-	const detailsElements = Array.from(container.querySelectorAll("details"));
-	detailsElements.forEach((detailsEl) => {
-		const summary = detailsEl.querySelector("summary");
-		if (summary) summary.remove();
-
-		// Move inner children out of details tag into parent container
-		while (detailsEl.firstChild) {
-			detailsEl.parentNode?.insertBefore(detailsEl.firstChild, detailsEl);
-		}
-		detailsEl.remove();
-	});
-
-	// Remove bottom navigation/footer action rows
-	const actionRows = Array.from(container.querySelectorAll(".border-t"));
-	actionRows.forEach((row) => {
-		const text = row.textContent || "";
-		if (
-			text.includes("quiz") ||
-			text.includes("Previous") ||
-			text.includes("Transitioning") ||
-			text.includes("Next") ||
-			row.children.length === 0
-		) {
-			row.remove();
-		}
-	});
+function PrintMarkdownBody({ content }: { content: string }) {
+	return React.createElement(
+		"div",
+		{ className: "pdf-print-body" },
+		React.createElement(
+			ReactMarkdown,
+			{
+				remarkPlugins: [remarkGfm, remarkMath],
+				rehypePlugins: [rehypeKatex, rehypeRaw],
+				components: {
+					code({ className, children, ...props }: PrintCodeProps) {
+						const isBlock =
+							typeof className === "string" &&
+							className.includes("language-");
+						if (isBlock) {
+							return React.createElement(
+								"code",
+								{ className, ...props },
+								children,
+							);
+						}
+						return React.createElement(
+							"code",
+							{
+								className,
+								style: {
+									backgroundColor: "#f4f4f5",
+									color: "#09090b",
+									borderRadius: "4px",
+									padding: "2px 6px",
+								},
+								...props,
+							},
+							children,
+						);
+					},
+					pre({ children }: { children?: React.ReactNode }) {
+						return React.createElement(
+							"pre",
+							{
+								style: {
+									backgroundColor: "#f4f4f5",
+									color: "#09090b",
+									border: "1px solid #e4e4e7",
+									borderRadius: "8px",
+									padding: "12px",
+									overflowX: "auto",
+								},
+							},
+							children,
+						);
+					},
+				},
+			},
+			content,
+		),
+	);
 }
 
-/**
- * Polls off-screen container until markdown text, KaTeX formulas, and Mermaid SVG diagrams
- * finish rendering.
- */
-async function waitForContentSettled(container: HTMLElement, maxWaitMs = 4000): Promise<void> {
-	const startTime = Date.now();
-	// Mermaid debounces 300ms — only enforce floor while wrappers still lack SVG.
-	await new Promise<void>((resolve) => {
-		const check = () => {
-			const hasText = !!container.querySelector(
-				"p, h1, h2, h3, h4, h5, h6, li, table, code, pre, span",
-			);
-			const mermaidWrappers = Array.from(
-				container.querySelectorAll(".mermaid-wrapper"),
-			);
-			const pendingMermaid = mermaidWrappers.some(
-				(w) => !w.querySelector("svg") && !w.querySelector(".text-red-500"),
-			);
-			const mermaidsReady = !pendingMermaid;
-			const elapsed = Date.now() - startTime;
-			const minWait = pendingMermaid ? 350 : 0;
-
-			if ((hasText && mermaidsReady && elapsed >= minWait) || elapsed > maxWaitMs) {
-				setTimeout(resolve, pendingMermaid ? 200 : 50);
-			} else {
-				setTimeout(check, 50);
-			}
-		};
-		check();
-	});
-}
-
-/**
- * Helper to construct a jsPDF instance for a given concept element.
- * Positions exportWrapper at position: fixed; left: 0; top: 0; zIndex: -99999
- * so html2canvas reads (0,0) coordinates without clipping, without body reflow flicker.
- */
-async function buildPdfForElement(
+function buildPdfHeader(
 	title: string,
-	contentElement: HTMLElement,
 	sequenceIndex?: number,
 	complexity?: string,
-): Promise<jsPDF> {
-	// fixed + off-flow: no body reflow/scrollbar flicker; left/top 0 so html2canvas
-	// reads real (0,0) coords (left:-9999px clips overflow and blanks body pages)
-	const exportWrapper = document.createElement("div");
-	exportWrapper.className = "pdf-export-wrapper";
-	exportWrapper.style.position = "fixed";
-	exportWrapper.style.left = "0";
-	exportWrapper.style.top = "0";
-	exportWrapper.style.zIndex = "-99999";
-	exportWrapper.style.width = "800px";
-	exportWrapper.style.backgroundColor = "#ffffff";
-	exportWrapper.style.color = "#18181b";
-	exportWrapper.style.padding = "32px";
-	exportWrapper.style.boxSizing = "border-box";
-	exportWrapper.style.fontFamily = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
-	exportWrapper.style.overflow = "visible";
-	exportWrapper.style.pointerEvents = "none";
-	exportWrapper.setAttribute("aria-hidden", "true");
-
-	// Scoped light mode typography and code highlighting rules
-	const styleTag = document.createElement("style");
-	styleTag.textContent = `
-		.pdf-export-wrapper {
-			background-color: #ffffff !important;
-			color: #18181b !important;
-		}
-		.pdf-export-wrapper * {
-			box-sizing: border-box !important;
-		}
-		.pdf-export-wrapper p, .pdf-export-wrapper li, .pdf-export-wrapper span, .pdf-export-wrapper td, .pdf-export-wrapper th {
-			color: #18181b !important;
-			line-height: 1.6 !important;
-		}
-		.pdf-export-wrapper h1, .pdf-export-wrapper h2, .pdf-export-wrapper h3, .pdf-export-wrapper h4, .pdf-export-wrapper h5, .pdf-export-wrapper h6 {
-			color: #09090b !important;
-			font-weight: 700 !important;
-		}
-		.pdf-export-wrapper pre,
-		.pdf-export-wrapper .not-prose,
-		.pdf-export-wrapper [class*="language-"],
-		.pdf-export-wrapper .token {
-			background-color: #f4f4f5 !important;
-			background-image: none !important;
-			border: 1px solid #e4e4e7 !important;
-			border-radius: 8px !important;
-			color: #18181b !important;
-		}
-		.pdf-export-wrapper pre {
-			padding: 12px !important;
-			margin: 12px 0 !important;
-		}
-		.pdf-export-wrapper pre code,
-		.pdf-export-wrapper code,
-		.pdf-export-wrapper pre span,
-		.pdf-export-wrapper .token {
-			background-color: transparent !important;
-			background-image: none !important;
-			color: #09090b !important;
-			font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace !important;
-			text-shadow: none !important;
-		}
-		.pdf-export-wrapper .katex {
-			color: #09090b !important;
-			font-size: 1.05em !important;
-		}
-		.pdf-export-wrapper .katex-html {
-			color: #09090b !important;
-		}
-		.pdf-export-wrapper .katex-mathml {
-			display: none !important;
-		}
-		.pdf-export-wrapper table {
-			border-collapse: collapse !important;
-			width: 100% !important;
-			margin: 16px 0 !important;
-		}
-		.pdf-export-wrapper th, .pdf-export-wrapper td {
-			border: 1px solid #e4e4e7 !important;
-			padding: 8px 12px !important;
-			color: #18181b !important;
-		}
-		.pdf-export-wrapper th {
-			background-color: #f4f4f5 !important;
-			font-weight: 700 !important;
-		}
-		.pdf-export-wrapper strong {
-			color: #09090b !important;
-			font-weight: 700 !important;
-		}
-	`;
-	exportWrapper.appendChild(styleTag);
-
-	// PDF Header
-	const headerDiv = document.createElement("div");
+	ownerDoc: Document = document,
+): HTMLElement {
+	const headerDiv = ownerDoc.createElement("div");
 	headerDiv.style.borderBottom = "2px solid #e4e4e7";
 	headerDiv.style.paddingBottom = "16px";
 	headerDiv.style.marginBottom = "24px";
@@ -449,8 +529,8 @@ async function buildPdfForElement(
 	headerDiv.style.justifyContent = "space-between";
 	headerDiv.style.alignItems = "center";
 
-	const leftHeader = document.createElement("div");
-	const titleEl = document.createElement("h1");
+	const leftHeader = ownerDoc.createElement("div");
+	const titleEl = ownerDoc.createElement("h1");
 	titleEl.style.fontSize = "22px";
 	titleEl.style.fontWeight = "700";
 	titleEl.style.color = "#18181b";
@@ -459,7 +539,7 @@ async function buildPdfForElement(
 	leftHeader.appendChild(titleEl);
 
 	if (complexity) {
-		const badge = document.createElement("span");
+		const badge = ownerDoc.createElement("span");
 		badge.style.display = "inline-block";
 		badge.style.fontSize = "11px";
 		badge.style.fontWeight = "600";
@@ -474,7 +554,7 @@ async function buildPdfForElement(
 	headerDiv.appendChild(leftHeader);
 
 	if (typeof sequenceIndex === "number") {
-		const indexEl = document.createElement("span");
+		const indexEl = ownerDoc.createElement("span");
 		indexEl.style.fontSize = "14px";
 		indexEl.style.fontWeight = "600";
 		indexEl.style.color = "#71717a";
@@ -482,92 +562,112 @@ async function buildPdfForElement(
 		headerDiv.appendChild(indexEl);
 	}
 
-	exportWrapper.appendChild(headerDiv);
+	return headerDiv;
+}
 
-	// Clone explanation content and reset cloned root styles
-	const contentClone = contentElement.cloneNode(true) as HTMLElement;
-	contentClone.style.position = "relative";
-	contentClone.style.left = "0";
-	contentClone.style.top = "0";
-	contentClone.style.width = "100%";
-	contentClone.style.height = "auto";
-	contentClone.style.display = "block";
-	contentClone.style.opacity = "1";
-	contentClone.style.visibility = "visible";
-	contentClone.style.color = "#18181b";
-	contentClone.style.backgroundColor = "#ffffff";
-	contentClone.style.zIndex = "auto";
+/** Mermaid sometimes leaves temp nodes on parent body — strip without touching app UI. */
+function scrubMermaidTempNodes(root: ParentNode = document.body): void {
+	root
+		.querySelectorAll(
+			'[id^="dpdfmmd"], [id^="pdfmmd"], [id^="dpdf-mermaid"], [id^="pdf-mermaid"]',
+		)
+		.forEach((el) => {
+			el.remove();
+		});
+}
 
-	// Ensure visible descendant elements stay visible
-	contentClone.querySelectorAll("*").forEach((el) => {
-		if (el instanceof HTMLElement || el instanceof SVGElement) {
-			if (el.classList.contains("katex-mathml")) {
-				el.style.display = "none";
+function flushFrames(count = 2): Promise<void> {
+	return new Promise((resolve) => {
+		const step = (left: number) => {
+			if (left <= 0) {
+				resolve();
 				return;
 			}
-			if (el.style.opacity === "0" || el.style.opacity === "0.01") {
-				el.style.opacity = "1";
-			}
-			if (el.style.visibility === "hidden") {
-				if (el.style.position !== "absolute" || el.style.top !== "-9999px") {
-					el.style.visibility = "visible";
-				}
-			}
-		}
+			requestAnimationFrame(() => step(left - 1));
+		};
+		step(count);
 	});
+}
 
-	stripInteractiveElements(contentClone);
-	stripCuriositySpark(contentClone);
-
-	const firstH1 = contentClone.querySelector("h1");
-	if (firstH1 && firstH1.textContent?.trim().toLowerCase() === title.trim().toLowerCase()) {
-		firstH1.remove();
+/**
+ * Build multipage jsPDF from markdown (strip → mermaid → print DOM → canvas).
+ * All DOM work runs inside a hidden iframe so the visible app never reflows.
+ */
+async function buildPdfFromMarkdown(
+	title: string,
+	markdown: string,
+	sequenceIndex?: number,
+	complexity?: string,
+): Promise<jsPDF> {
+	const stripped = stripCuriosityFromMarkdown(markdown);
+	if (!stripped.trim()) {
+		throw new Error("No content to export.");
 	}
 
-	moveDiagramsToDedicatedSection(contentClone);
-	prepareSvgsForPdf(contentClone);
+	const sandbox = await createExportSandbox();
+	const { iframe, doc, host, cleanup } = sandbox;
 
-	exportWrapper.appendChild(contentClone);
-	document.body.appendChild(exportWrapper);
+	host.appendChild(buildPdfHeader(title, sequenceIndex, complexity, doc));
+
+	const bodyMount = doc.createElement("div");
+	host.appendChild(bodyMount);
+
+	const root = createRoot(bodyMount);
 
 	try {
-		await waitForContentSettled(exportWrapper, 4000);
+		// Mermaid measures on parent-document host (real box). Not iframe.
+		const withDiagrams = await renderMermaidFencesInMarkdown(stripped);
+		scrubMermaidTempNodes(document.body);
+
+		root.render(
+			React.createElement(PrintMarkdownBody, { content: withDiagrams }),
+		);
+		await flushFrames(2);
+
+		prepareSvgsForPdf(host);
 
 		const wrapperHeight = Math.max(
-			exportWrapper.scrollHeight,
-			exportWrapper.offsetHeight,
-			contentClone.scrollHeight + 120,
-			600,
+			host.scrollHeight,
+			host.offsetHeight,
+			doc.body.scrollHeight,
+			400,
 		);
-		exportWrapper.style.height = `${wrapperHeight}px`;
 
-		const canvas = await html2canvas(exportWrapper, {
-			scale: 2,
+		// Size iframe to content for correct layout metrics; stay visibility:hidden
+		iframe.style.height = `${wrapperHeight + 32}px`;
+		await flushFrames(1);
+
+		// Capture inside iframe only — never reflow parent document
+		const canvas = await html2canvas(host, {
+			scale: 1.5,
 			useCORS: true,
 			allowTaint: false,
 			logging: false,
 			backgroundColor: "#ffffff",
-			x: 0,
-			y: 0,
-			scrollX: 0,
-			scrollY: 0,
 			width: 800,
 			height: wrapperHeight,
 			windowWidth: 800,
 			windowHeight: wrapperHeight,
-			onclone: (_doc, cloned) => {
-				// Flatten Prism/theme inline colors that beat stylesheet cascade
-				cloned.querySelectorAll("pre, code, .token").forEach((node) => {
+			scrollX: 0,
+			scrollY: 0,
+			onclone: (_clonedDoc, cloned) => {
+				cloned.style.opacity = "1";
+				cloned.style.visibility = "visible";
+				cloned.querySelectorAll("pre, code").forEach((node) => {
 					if (node instanceof HTMLElement) {
 						node.style.setProperty("color", "#09090b", "important");
-						node.style.setProperty("background-color", node.tagName === "PRE" ? "#f4f4f5" : "transparent", "important");
+						node.style.setProperty(
+							"background-color",
+							node.tagName === "PRE" ? "#f4f4f5" : "transparent",
+							"important",
+						);
 						node.style.setProperty("text-shadow", "none", "important");
 					}
 				});
 			},
 		});
 
-		const imgData = canvas.toDataURL("image/jpeg", 0.98);
+		const imgData = canvas.toDataURL("image/jpeg", 0.92);
 		const pdf = new jsPDF({
 			orientation: "portrait",
 			unit: "mm",
@@ -596,41 +696,68 @@ async function buildPdfForElement(
 
 		return pdf;
 	} finally {
-		if (document.body.contains(exportWrapper)) {
-			document.body.removeChild(exportWrapper);
+		try {
+			root.unmount();
+		} catch {
+			// ignore unmount races in tests
 		}
+		scrubMermaidTempNodes(document.body);
+		cleanup();
 	}
 }
 
 /**
- * Exports a single course concept module content as a downloadable PDF.
+ * Exports a single course concept module as a downloadable PDF from markdown.
  */
 export async function exportConceptAsPdf(
 	title: string,
-	contentElement: HTMLElement,
+	markdown: string,
 	sequenceIndex?: number,
 	complexity?: string,
 ): Promise<void> {
 	const filename = sanitizeFilename(title);
-	const pdf = await buildPdfForElement(title, contentElement, sequenceIndex, complexity);
+	const pdf = await buildPdfFromMarkdown(
+		title,
+		markdown,
+		sequenceIndex,
+		complexity,
+	);
 	pdf.save(filename);
 }
 
 /**
- * Generates a PDF Blob for a concept module.
+ * Generates a PDF Blob for a concept module from markdown.
  */
 export async function exportConceptAsPdfBlob(
 	title: string,
-	contentElement: HTMLElement,
+	markdown: string,
 	sequenceIndex?: number,
 	complexity?: string,
 ): Promise<Blob> {
-	const pdf = await buildPdfForElement(title, contentElement, sequenceIndex, complexity);
+	const pdf = await buildPdfFromMarkdown(
+		title,
+		markdown,
+		sequenceIndex,
+		complexity,
+	);
 	return pdf.output("blob");
 }
 
 /**
- * Exports all concept modules of a completed course as a ZIP file named after the course.
+ * Yield main thread so UI stays responsive during multi-module ZIP export.
+ */
+function yieldToMain(): Promise<void> {
+	return new Promise((resolve) => {
+		if (typeof requestIdleCallback === "function") {
+			requestIdleCallback(() => resolve(), { timeout: 50 });
+		} else {
+			setTimeout(resolve, 0);
+		}
+	});
+}
+
+/**
+ * Exports all concept modules of a completed course as a ZIP named after course.
  */
 export async function exportCourseAsZip(
 	sessionId: string,
@@ -649,60 +776,24 @@ export async function exportCourseAsZip(
 
 	const zip = new JSZip();
 
-	// fixed off-flow mount — no host UI reflow while modules render
-	const mountDiv = document.createElement("div");
-	mountDiv.className = "pdf-temp-mount";
-	mountDiv.style.position = "fixed";
-	mountDiv.style.left = "0";
-	mountDiv.style.top = "0";
-	mountDiv.style.zIndex = "-99999";
-	mountDiv.style.width = "800px";
-	mountDiv.style.backgroundColor = "#ffffff";
-	mountDiv.style.color = "#18181b";
-	mountDiv.style.opacity = "1";
-	mountDiv.style.visibility = "visible";
-	mountDiv.style.overflow = "visible";
-	mountDiv.style.pointerEvents = "none";
-	mountDiv.setAttribute("aria-hidden", "true");
-	document.body.appendChild(mountDiv);
+	for (let i = 0; i < sortedNodes.length; i++) {
+		const node = sortedNodes[i];
+		const markdown = node.content_markdown;
+		if (!markdown?.trim()) continue;
 
-	const root = createRoot(mountDiv);
+		await yieldToMain();
 
-	try {
-		for (let i = 0; i < sortedNodes.length; i++) {
-			const node = sortedNodes[i];
-			const markdown = node.content_markdown;
-			if (!markdown) continue;
+		const pdfBlob = await exportConceptAsPdfBlob(
+			node.title,
+			markdown,
+			node.sequence_index ?? i,
+			node.complexity,
+		);
 
-			// key forces full remount so prior module Mermaid/SVG never leaks
-			root.render(
-				React.createElement(MarkdownRenderer, {
-					key: node.id ?? `export-node-${i}`,
-					content: markdown,
-				}),
-			);
-
-			// Flush React commit before polling Mermaid (300ms debounce + render)
-			await new Promise<void>((r) => requestAnimationFrame(() => r()));
-			await waitForContentSettled(mountDiv, 5000);
-
-			const pdfBlob = await exportConceptAsPdfBlob(
-				node.title,
-				mountDiv,
-				node.sequence_index ?? i,
-				node.complexity,
-			);
-
-			const seqPrefix = String((node.sequence_index ?? i) + 1).padStart(2, "0");
-			const cleanTitle = sanitizeFilename(node.title).replace(/\.pdf$/i, "");
-			const pdfFilename = `${seqPrefix}_${cleanTitle}.pdf`;
-			zip.file(pdfFilename, pdfBlob);
-		}
-	} finally {
-		root.unmount();
-		if (document.body.contains(mountDiv)) {
-			document.body.removeChild(mountDiv);
-		}
+		const seqPrefix = String((node.sequence_index ?? i) + 1).padStart(2, "0");
+		const cleanTitle = sanitizeFilename(node.title).replace(/\.pdf$/i, "");
+		const pdfFilename = `${seqPrefix}_${cleanTitle}.pdf`;
+		zip.file(pdfFilename, pdfBlob);
 	}
 
 	const zipBlob = await zip.generateAsync({ type: "blob" });

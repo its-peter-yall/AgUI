@@ -75,9 +75,11 @@ if (typeof window !== "undefined") {
 
 interface MermaidProps {
 	chart: string;
+	/** Skip debounce — used by PDF/ZIP export so diagrams settle immediately. */
+	eager?: boolean;
 }
 
-export function Mermaid({ chart }: MermaidProps) {
+export function Mermaid({ chart, eager = false }: MermaidProps) {
 	const uniqueId = useId().replace(/:/g, "-");
 	const elementId = useRef(`mermaid-${uniqueId}`);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -126,16 +128,23 @@ export function Mermaid({ chart }: MermaidProps) {
 			}
 		};
 
-		// Debounce rendering by 300ms to avoid layout flickering and syntax error thrashing
+		// Debounce only for live typing; export path renders immediately
+		if (eager) {
+			void renderChart();
+			return () => {
+				isMounted = false;
+			};
+		}
+
 		const timer = setTimeout(() => {
-			renderChart();
+			void renderChart();
 		}, 300);
 
 		return () => {
 			isMounted = false;
 			clearTimeout(timer);
 		};
-	}, [chart]);
+	}, [chart, eager]);
 
 	// Close on escape key
 	useEffect(() => {
@@ -617,6 +626,8 @@ interface MarkdownRendererProps {
 	selectedHeadingIds?: string[];
 	onToggleHeadingChat?: (headingId: string) => void;
 	enableHeadingChat?: boolean;
+	/** Render Mermaid diagrams immediately (no debounce). For PDF/ZIP export. */
+	eagerDiagrams?: boolean;
 }
 
 /**
@@ -788,6 +799,7 @@ export function MarkdownRenderer({
 	selectedHeadingIds = EMPTY_ARRAY,
 	onToggleHeadingChat,
 	enableHeadingChat = false,
+	eagerDiagrams = false,
 }: MarkdownRendererProps) {
 	const h2 = useMemo(() => createHeadingComponent(
 		2,
@@ -902,14 +914,19 @@ export function MarkdownRenderer({
 			const match = /language-([\w-]+)/.exec(codeClassName || "");
 			const lang = match ? match[1] : "";
 			if (lang === "mermaid") {
-				return <Mermaid chart={String(children).replace(/\n$/, "")} />;
+				return (
+					<Mermaid
+						chart={String(children).replace(/\n$/, "")}
+						eager={eagerDiagrams}
+					/>
+				);
 			}
 			if (lang === "vector-plot") {
 				return <VectorPlot data={String(children).replace(/\n$/, "")} />;
 			}
 			return <CodeBlock className={codeClassName}>{children}</CodeBlock>;
 		},
-	}), [h2, h3, h4, h5, h6]);
+	}), [h2, h3, h4, h5, h6, eagerDiagrams]);
 
 	return (
 		<div
