@@ -44,6 +44,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
+import { List, MessageCircle } from "lucide-react";
 import {
 	getLearningSession,
 	getRevisionSummary,
@@ -53,6 +54,8 @@ import { useRevisionSession } from "./useRevisionSession";
 import { useRevisionMutations } from "./useRevisionMutations";
 import { RevisionConceptCard } from "./RevisionConceptCard";
 import { RevisionSummaryModal } from "./RevisionSummaryModal";
+import { TableOfContentsModal } from "./TableOfContentsModal";
+import { ChatPanel } from "./ChatPanel";
 import { SettingsButton } from "@/components/SettingsButton";
 import { cn } from "@/lib/utils";
 import {
@@ -79,6 +82,10 @@ export function RevisionPage() {
 	// Carousel state
 	const [currentIndex, setCurrentIndex] = useState(0);
 	const [direction, setDirection] = useState(0);
+
+	// TOC and Chat modal states
+	const [isTOCOpen, setIsTOCOpen] = useState(false);
+	const [isChatOpen, setIsChatOpen] = useState(false);
 
 	// Store quiz results per node for feedback display
 	const [quizResults, setQuizResults] = useState<
@@ -348,57 +355,21 @@ export function RevisionPage() {
 						{/* Spacer for alignment */}
 					</div>
 
-					{/* Revision progress bar */}
-					<div className="space-y-1">
-						<div className="flex items-center justify-between text-xs text-muted-foreground">
-							<span>Revision Progress</span>
-							<span aria-live="polite">
-								{completedNodes} / {totalNodes} completed
-							</span>
-						</div>
-						<div
-							className="h-2 bg-muted rounded-full overflow-hidden"
-							role="progressbar"
-							aria-valuenow={progressPercent}
-							aria-valuemin={0}
-							aria-valuemax={100}
-							aria-label={`Revision progress: ${progressPercent}% complete`}
-							data-testid="revision-progress-bar"
+					{/* Table of Contents button (replaces progress bar) */}
+					<div className="flex items-center justify-between pt-1">
+						<button
+							onClick={() => setIsTOCOpen(true)}
+							className="inline-flex items-center gap-2 text-sm font-medium border border-input bg-background hover:bg-muted text-foreground rounded-lg px-3.5 py-1.5 transition-colors cursor-pointer shadow-xs focus:outline-none focus:ring-2 focus:ring-primary"
+							aria-label="Open Table of Contents"
+							data-testid="toc-button"
 						>
-							<div
-								className="h-full bg-primary rounded-full transition-all duration-300"
-								style={{ width: `${progressPercent}%` }}
-							/>
+							<List className="h-4 w-4 text-primary" />
+							<span>Table of Contents</span>
+						</button>
+						<div className="text-xs font-medium text-muted-foreground" aria-live="polite">
+							{completedNodes} / {totalNodes} completed
 						</div>
 					</div>
-
-					{/* Node step indicators */}
-					<nav aria-label="Revision progress" className="mt-2">
-						<ol className="flex items-center gap-1 list-none p-0 m-0">
-							{originalSession.nodes.map((node, index) => {
-								const progress = revisionProgressMap.get(node.id);
-								const isCurrent = index === currentIndex;
-								const stepColor = getRevisionStepColor(progress?.status);
-
-								return (
-									<li key={node.id} className="flex-1">
-										<button
-											onClick={() => goToSlide(index)}
-											aria-current={isCurrent ? "step" : undefined}
-											aria-label={`${node.title}: ${progress?.status ?? "pending"}`}
-											title={`${node.title} (${progress?.status ?? "pending"})`}
-											className={cn(
-												"w-full h-2 rounded-full transition-colors duration-200 cursor-pointer hover:opacity-80",
-												stepColor,
-												isCurrent && "ring-2 ring-offset-1 ring-primary",
-												"focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
-											)}
-										/>
-									</li>
-								);
-							})}
-						</ol>
-					</nav>
 				</div>
 			</header>
 
@@ -467,7 +438,7 @@ export function RevisionPage() {
 							className={cn(
 								"px-4 py-2 rounded-md text-sm font-medium transition-colors",
 								canGoPrev
-									? "text-muted-foreground hover:bg-muted"
+									? "text-muted-foreground hover:bg-muted cursor-pointer"
 									: "opacity-0 pointer-events-none",
 							)}
 						>
@@ -479,7 +450,7 @@ export function RevisionPage() {
 							className={cn(
 								"px-4 py-2 rounded-md text-sm font-medium transition-colors",
 								canGoNext
-									? "text-muted-foreground hover:bg-muted"
+									? "text-muted-foreground hover:bg-muted cursor-pointer"
 									: "opacity-0 pointer-events-none",
 							)}
 						>
@@ -501,6 +472,47 @@ export function RevisionPage() {
 					<span className="text-sm text-muted-foreground">Updating...</span>
 				</div>
 			)}
+
+			{/* Chat FAB - bottom-right fixed */}
+			{!isChatOpen && (
+				<button
+					onClick={() => setIsChatOpen(true)}
+					className="fixed bottom-6 right-6 z-30 h-14 w-14 rounded-full bg-(--cyber-yellow) text-black shadow-lg hover:bg-(--cyber-yellow)/90 transition-colors flex items-center justify-center cursor-pointer"
+					aria-label="Open concept chat"
+					data-testid="revision-chat-fab"
+				>
+					<MessageCircle className="h-6 w-6" />
+				</button>
+			)}
+
+			{/* Chat Panel - slides in from right */}
+			<ChatPanel
+				isOpen={isChatOpen}
+				onClose={() => setIsChatOpen(false)}
+				sessionId={sessionId}
+				nodeId={currentNode?.id ?? ""}
+				isCourseComplete={revisionSession.status === "completed"}
+			/>
+
+			{/* Table of Contents Modal */}
+			<TableOfContentsModal
+				isOpen={isTOCOpen}
+				onClose={() => setIsTOCOpen(false)}
+				nodes={originalSession.nodes.map((node) => {
+					const progress = revisionProgressMap.get(node.id);
+					const isDone =
+						progress?.status === "reviewed" || progress?.status === "quiz_passed";
+					return {
+						...node,
+						status: isDone ? ("COMPLETED" as const) : ("AVAILABLE" as const),
+					};
+				})}
+				currentNodeId={currentNode?.id}
+				onSelectTopic={(index) => {
+					goToSlide(index);
+					setIsTOCOpen(false);
+				}}
+			/>
 
 			{/* Footer */}
 			<footer className="border-t py-4 text-center text-sm text-muted-foreground">

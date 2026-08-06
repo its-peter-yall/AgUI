@@ -8,26 +8,39 @@
  *    Unit tests for pdfExportUtils helper functions.
  *
  * ROLE IN PROJECT:
- *    Ensures filename sanitization and export triggering work reliably.
+ *    Ensures filename sanitization, CuriositySpark stripping, diagram relocation,
+ *    and ZIP export functionality work reliably.
  *
  * KEY COMPONENTS:
  *    - sanitizeFilename tests: Verifies illegal character removal and extension handling
  *    - exportConceptAsPdf tests: Verifies html2canvas-pro and jsPDF caller behavior
+ *    - exportCourseAsZip tests: Verifies ZIP creation and packaging for completed courses
  *
  * DEPENDENCIES:
  *    - External: vitest
- *    - Internal: ./pdfExportUtils
+ *    - Internal: ./pdfExportUtils, @/lib/learningApi
  * ============================================================================
  */
 import { describe, it, expect, vi } from "vitest";
 import {
 	sanitizeFilename,
 	exportConceptAsPdf,
+	exportCourseAsZip,
 	stripCuriositySpark,
 	moveDiagramsToDedicatedSection,
 } from "./pdfExportUtils";
 
+if (typeof window !== "undefined") {
+	if (!URL.createObjectURL) {
+		URL.createObjectURL = vi.fn().mockReturnValue("blob:mock-url");
+	}
+	if (!URL.revokeObjectURL) {
+		URL.revokeObjectURL = vi.fn();
+	}
+}
+
 const mockSave = vi.fn();
+const mockOutput = vi.fn().mockReturnValue(new Blob(["mock pdf"], { type: "application/pdf" }));
 const mockAddImage = vi.fn();
 const mockAddPage = vi.fn();
 
@@ -56,7 +69,44 @@ vi.mock("jspdf", () => {
 			addImage: mockAddImage,
 			addPage: mockAddPage,
 			save: mockSave,
+			output: mockOutput,
 		})),
+	};
+});
+
+const mockZipFile = vi.fn();
+const mockGenerateAsync = vi.fn().mockResolvedValue(new Blob(["mock zip"], { type: "application/zip" }));
+
+vi.mock("jszip", () => {
+	return {
+		default: vi.fn().mockImplementation(() => ({
+			file: mockZipFile,
+			generateAsync: mockGenerateAsync,
+		})),
+	};
+});
+
+vi.mock("@/lib/learningApi", () => {
+	return {
+		getLearningSession: vi.fn().mockResolvedValue({
+			session: { id: "session-1", course_title: "Mastering Knowledge Graphs and GraphRAG" },
+			nodes: [
+				{
+					id: "node-1",
+					title: "What is GraphRAG?",
+					sequence_index: 0,
+					content_markdown: "## What is GraphRAG?\nGraphRAG is a retrieval technique.",
+					complexity: "Basic",
+				},
+				{
+					id: "node-2",
+					title: "Building Knowledge Graphs",
+					sequence_index: 1,
+					content_markdown: "## Building Knowledge Graphs\nNodes and edges representation.",
+					complexity: "Intermediate",
+				},
+			],
+		}),
 	};
 });
 
@@ -93,7 +143,7 @@ describe("pdfExportUtils", () => {
 			container.innerHTML = `
 				<h2>Main Concept</h2>
 				<p>Main content explanation</p>
-				<div class="mt-6 p-4 rounded-lg border">
+				<div class="curiosity-spark mt-6 p-4 rounded-lg border border-primary/20 bg-primary/5">
 					<div class="flex items-center gap-2 mb-3">
 						<h4>Curious to explore more?</h4>
 					</div>
@@ -107,6 +157,54 @@ describe("pdfExportUtils", () => {
 			expect(container.innerHTML).not.toContain("Curious to explore more?");
 			expect(container.innerHTML).not.toContain("Click any question to ask:");
 			expect(container.innerHTML).toContain("Main Concept");
+			expect(container.innerHTML).toContain("Main content explanation");
+		});
+
+		it("does not wipe parent card body when curiosity sits inside generic border/rounded wrappers", () => {
+			const container = document.createElement("div");
+			container.className = "p-4 relative border rounded-lg";
+			container.innerHTML = `
+				<h2>GraphRAG Basics</h2>
+				<p>Body paragraph that must survive export.</p>
+				<pre><code>const x = 1;</code></pre>
+				<div class="mt-6 p-4 rounded-lg border border-primary/20 bg-primary/5">
+					<div class="flex items-center gap-2 mb-3">
+						<h4>Curious to explore more?</h4>
+					</div>
+					<p>Click any question to ask:</p>
+					<ul><li>What is a knowledge graph?</li></ul>
+				</div>
+			`;
+
+			stripCuriositySpark(container);
+
+			expect(container.querySelector("h2")?.textContent).toBe("GraphRAG Basics");
+			expect(container.innerHTML).toContain("Body paragraph that must survive export.");
+			expect(container.innerHTML).toContain("const x = 1;");
+			expect(container.innerHTML).not.toContain("Curious to explore more?");
+			expect(container.innerHTML).not.toContain("What is a knowledge graph?");
+		});
+
+		it("strips markdown-embedded curiosity heading without deleting prior siblings", () => {
+			const container = document.createElement("div");
+			container.innerHTML = `
+				<h2>Main Concept</h2>
+				<p>Keep me</p>
+				<h3>Curious to explore more?</h3>
+				<p>Follow-up question list intro</p>
+				<ul><li>Q1</li></ul>
+				<h3>Next Real Section</h3>
+				<p>After curiosity</p>
+			`;
+
+			stripCuriositySpark(container);
+
+			expect(container.innerHTML).toContain("Keep me");
+			expect(container.innerHTML).toContain("Next Real Section");
+			expect(container.innerHTML).toContain("After curiosity");
+			expect(container.innerHTML).not.toContain("Curious to explore more?");
+			expect(container.innerHTML).not.toContain("Follow-up question list intro");
+			expect(container.innerHTML).not.toContain("Q1");
 		});
 	});
 
@@ -171,6 +269,22 @@ describe("pdfExportUtils", () => {
 			const html2canvas = (await import("html2canvas-pro")).default;
 			expect(html2canvas).toHaveBeenCalled();
 			expect(mockSave).toHaveBeenCalledWith("Understanding Classic RAG and Its Limits.pdf");
+		});
+	});
+
+	describe("exportCourseAsZip", () => {
+		it("fetches course nodes, builds PDF for each module, and packages into zip with sequential filenames", async () => {
+			// Mock click on anchor element to prevent jsdom navigation error
+			const mockClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+			await exportCourseAsZip("session-1", "Mastering Knowledge Graphs and GraphRAG");
+
+			expect(mockZipFile).toHaveBeenCalledTimes(2);
+			expect(mockZipFile).toHaveBeenNthCalledWith(1, "01_What is GraphRAG-.pdf", expect.any(Blob));
+			expect(mockZipFile).toHaveBeenNthCalledWith(2, "02_Building Knowledge Graphs.pdf", expect.any(Blob));
+			expect(mockGenerateAsync).toHaveBeenCalledWith({ type: "blob" });
+
+			mockClick.mockRestore();
 		});
 	});
 });

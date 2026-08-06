@@ -111,6 +111,7 @@ export function RevisionConceptCard({
 	quizResult,
 }: RevisionConceptCardProps) {
 	const [selectedOptions, setSelectedOptions] = useState<Set<string>>(new Set());
+	const [currentQuizIndex, setCurrentQuizIndex] = useState(0);
 
 	const badge = statusBadges[revisionProgress.status];
 
@@ -157,8 +158,8 @@ export function RevisionConceptCard({
 				: null);
 		if (!quizData || quizData.quizzes.length === 0) return null;
 
-		const currentQuizIndex = 0; // In revision, always start from first quiz
-		const currentQuiz = quizData.quizzes[currentQuizIndex];
+		const safeQuizIndex = Math.min(currentQuizIndex, quizData.quizzes.length - 1);
+		const currentQuiz = quizData.quizzes[safeQuizIndex];
 		if (!currentQuiz) return null;
 
 		const isMultipleChoice =
@@ -182,8 +183,34 @@ export function RevisionConceptCard({
 				data-testid="revision-quiz-section"
 			>
 				{quizData.quizzes.length > 1 && (
-					<div className="text-sm text-muted-foreground">
-						Quiz {currentQuizIndex + 1} of {quizData.quizzes.length}
+					<div className="flex items-center justify-between text-sm text-muted-foreground pb-2 border-b">
+						<button
+							onClick={() => {
+								setCurrentQuizIndex((prev) => Math.max(0, prev - 1));
+								setSelectedOptions(new Set());
+							}}
+							disabled={safeQuizIndex === 0}
+							className="px-2 py-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none cursor-pointer transition-colors text-xs font-medium"
+							aria-label="Previous quiz"
+						>
+							&larr; Previous Quiz
+						</button>
+						<span className="font-medium">
+							Quiz {safeQuizIndex + 1} of {quizData.quizzes.length}
+						</span>
+						<button
+							onClick={() => {
+								setCurrentQuizIndex((prev) =>
+									Math.min(quizData.quizzes.length - 1, prev + 1),
+								);
+								setSelectedOptions(new Set());
+							}}
+							disabled={safeQuizIndex === quizData.quizzes.length - 1}
+							className="px-2 py-1 rounded hover:bg-muted disabled:opacity-30 disabled:pointer-events-none cursor-pointer transition-colors text-xs font-medium"
+							aria-label="Next quiz"
+						>
+							Next Quiz &rarr;
+						</button>
 					</div>
 				)}
 			<div id={`revision-quiz-question-${node.id}`}>
@@ -314,18 +341,31 @@ export function RevisionConceptCard({
 					</div>
 				)}
 
-				<div className="flex justify-end pt-2">
-				<button
-					onClick={() => handleQuizSubmit(currentQuizIndex)}
-					disabled={selectedOptions.size === 0 || isSubmitting || showFeedback}
-					className={cn(
-						"px-4 py-2 rounded-md transition-colors",
-						selectedOptions.size > 0 && !isSubmitting && !showFeedback
-							? "bg-primary text-primary-foreground hover:bg-primary/90"
-							: "bg-muted text-muted-foreground cursor-not-allowed",
+				<div className="flex justify-between items-center pt-2">
+					{quizData.quizzes.length > 1 && safeQuizIndex < quizData.quizzes.length - 1 ? (
+						<button
+							onClick={() => {
+								setCurrentQuizIndex((prev) => prev + 1);
+								setSelectedOptions(new Set());
+							}}
+							className="px-3 py-1.5 text-xs font-medium rounded-md border border-input hover:bg-muted transition-colors cursor-pointer"
+						>
+							Skip / Next Quiz &rarr;
+						</button>
+					) : (
+						<div />
 					)}
-					data-testid="revision-quiz-submit"
-				>
+					<button
+						onClick={() => handleQuizSubmit(safeQuizIndex)}
+						disabled={selectedOptions.size === 0 || isSubmitting || showFeedback}
+						className={cn(
+							"px-4 py-2 rounded-md transition-colors",
+							selectedOptions.size > 0 && !isSubmitting && !showFeedback
+								? "bg-primary text-primary-foreground hover:bg-primary/90"
+								: "bg-muted text-muted-foreground cursor-not-allowed",
+						)}
+						data-testid="revision-quiz-submit"
+					>
 						{isSubmitting ? "Submitting..." : "Submit Answer"}
 					</button>
 				</div>

@@ -9,7 +9,7 @@ interface CuriositySparkProps {
 export function CuriositySpark({ questions, onAskQuestion }: CuriositySparkProps) {
 	if (questions.length === 0) return null;
 	return (
-		<div className="mt-6 p-4 rounded-lg border border-primary/20 bg-primary/5">
+		<div className="curiosity-spark mt-6 p-4 rounded-lg border border-primary/20 bg-primary/5">
 			<div className="flex items-center gap-2 mb-3">
 				<MessageCircleQuestionMark className="w-4 h-4 text-primary" />
 				<h4 className="text-sm font-semibold text-primary">

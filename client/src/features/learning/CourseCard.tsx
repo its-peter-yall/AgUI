@@ -41,11 +41,12 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle, Trash2, AlertCircle } from "lucide-react";
+import { CheckCircle, Trash2, AlertCircle, Download } from "lucide-react";
 
 import type { LearningSessionSummary } from "@/types/learning";
 import { cn } from "@/lib/utils";
 import { RevisionHistoryList } from "./RevisionHistoryList";
+import { exportCourseAsZip } from "./pdfExportUtils";
 
 export interface CourseCardProps {
 	session: LearningSessionSummary;
@@ -123,8 +124,22 @@ export function CourseCard({
 	const genBadge = generationBadge(generation);
 	const [showConfirm, setShowConfirm] = useState(false);
 	const [isDeleting, setIsDeleting] = useState(false);
+	const [isExportingZip, setIsExportingZip] = useState(false);
 	const cancelBtnRef = useRef<HTMLButtonElement>(null);
 	const deleteTriggerRef = useRef<HTMLButtonElement>(null);
+
+	const handleDownloadZip = async (e: React.MouseEvent) => {
+		e.stopPropagation();
+		if (isExportingZip) return;
+		try {
+			setIsExportingZip(true);
+			await exportCourseAsZip(session.id, session.course_title);
+		} catch (err) {
+			console.error("Failed to export course ZIP:", err);
+		} finally {
+			setIsExportingZip(false);
+		}
+	};
 
 	// Focus the Cancel button when the delete confirmation dialog opens
 	useEffect(() => {
@@ -388,6 +403,23 @@ export function CourseCard({
 							)}
 						>
 							Practice Quizzes
+						</button>
+						<button
+							type="button"
+							onClick={handleDownloadZip}
+							disabled={isExportingZip}
+							title="Download all course modules as ZIP of PDFs"
+							aria-label="Download all course modules as ZIP of PDFs"
+							className={cn(
+								"inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium",
+								"border border-border text-foreground bg-card hover:bg-accent/50 transition-colors",
+								"focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background cursor-pointer",
+								isExportingZip && "opacity-70 cursor-wait",
+							)}
+							data-testid="download-course-zip-button"
+						>
+							<Download className={cn("h-4 w-4 text-muted-foreground", isExportingZip && "animate-bounce")} aria-hidden="true" />
+							<span>{isExportingZip ? "Exporting..." : "Download ZIP"}</span>
 						</button>
 					</div>
 				) : (

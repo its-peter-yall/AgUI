@@ -20,6 +20,7 @@
     "html2canvas-pro": "^2.3.3",
     "html2pdf.js": "^0.14.0",
     "jspdf": "^4.2.1",
+    "jszip": "^3.10.1",
     "katex": "^0.16.47",
     "lucide-react": "^0.563.0",
     "mermaid": "^11.16.0",
