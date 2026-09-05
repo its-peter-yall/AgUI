@@ -43,6 +43,7 @@ from server.database.storage_registry import (
 )
 from server.schemas.learning import ConceptChatMessage
 from server.schemas.search import SearchContext
+from server.services.concept_chat_search import WEB_SEARCH_TOOL
 from server.utils.prompt_cache import apply_openrouter_cache_control
 
 logger = logging.getLogger(__name__)
@@ -316,6 +317,13 @@ async def stream_concept_chat(
         create_kwargs["extra_body"] = {
             "reasoning": {"effort": effort},
         }
+    tools_enabled = bool(
+        search_context is not None and search_context.enabled
+    )
+    if tools_enabled:
+        create_kwargs["tools"] = [WEB_SEARCH_TOOL]
+        create_kwargs["parallel_tool_calls"] = False
+        create_kwargs["tool_choice"] = "auto"
 
     try:
         stream = await client.chat.completions.create(**create_kwargs)

@@ -392,3 +392,42 @@ class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
         roles = [item["role"] for item in kwargs["messages"]]
         self.assertIn("tool", roles)
         self.assertNotIn("tools", kwargs)
+
+    async def test_enabled_context_sends_web_search_tool(self) -> None:
+        client = _make_client([FakeStream(_answer_stream("from card"))])
+        events, client = await _run_chat(
+            client,
+            search_context=_enabled_context(),
+        )
+        self.assertEqual(
+            events,
+            [{"delta": "from card"}, "[DONE]"],
+        )
+        _args, kwargs = client.chat.completions.create.call_args
+        self.assertEqual(kwargs["tools"], [WEB_SEARCH_TOOL])
+        self.assertIs(kwargs["tools"][0], WEB_SEARCH_TOOL)
+        self.assertFalse(kwargs["parallel_tool_calls"])
+        self.assertEqual(kwargs["tool_choice"], "auto")
+        self.assertTrue(kwargs["stream"])
+        system_text = _system_text(kwargs["messages"])
+        self.assertNotIn("web_search", system_text)
+        self.assertNotIn("one search per turn", system_text.lower())
+        self.assertNotIn("meticulous", system_text.lower())
+        self.assertEqual(client.chat.completions.create.await_count, 1)
+
+    async def test_thinking_extra_body_unchanged_when_tools_enabled(
+        self,
+    ) -> None:
+        client = _make_client([FakeStream(_answer_stream("ok"))])
+        _events, client = await _run_chat(
+            client,
+            search_context=_enabled_context(),
+            thinking_enabled=True,
+            thinking_effort="medium",
+        )
+        _args, kwargs = client.chat.completions.create.call_args
+        self.assertEqual(
+            kwargs.get("extra_body"),
+            {"reasoning": {"effort": "medium"}},
+        )
+        self.assertEqual(kwargs["tools"], [WEB_SEARCH_TOOL])
