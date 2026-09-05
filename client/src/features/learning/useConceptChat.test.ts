@@ -157,4 +157,137 @@ describe('useConceptChat', () => {
     expect(result.current.messages[1]?.search).toBeUndefined();
     expect(result.current.webSearchEnabled).toBe(false);
   });
+
+  it('attaches onSearch blob to the finished assistant and keeps it after deltas', async () => {
+    streamConceptChatMock.mockImplementation(async (params: {
+      onSearch?: (search: NonNullable<ConceptChatMessage['search']>) => void;
+      onDelta: (delta: string) => void;
+    }) => {
+      params.onSearch?.(sampleSearch);
+      params.onDelta('Answer text');
+    });
+
+    const { result } = renderHook(() => useConceptChat('sess-1', 'node-1'));
+
+    await act(async () => {
+      await result.current.sendMessage('What is a tool?', []);
+    });
+
+    const last = result.current.messages[result.current.messages.length - 1];
+    expect(last).toEqual({
+      role: 'assistant',
+      content: 'Answer text',
+      search: sampleSearch,
+    });
+
+    const stored = JSON.parse(
+      localStorage.getItem(storageKey('sess-1', 'node-1')) ?? '{}',
+    ) as { messages: ConceptChatMessage[] };
+    expect(stored.messages.at(-1)?.search).toEqual(sampleSearch);
+  });
+
+  it('posts prior assistant search blobs in history and current globe flag', async () => {
+    const histories: ConceptChatMessage[][] = [];
+    const flags: Array<boolean | undefined> = [];
+
+    streamConceptChatMock.mockImplementation(async (params: {
+      history: ConceptChatMessage[];
+      webSearchEnabled?: boolean;
+      onSearch?: (search: NonNullable<ConceptChatMessage['search']>) => void;
+      onDelta: (delta: string) => void;
+    }) => {
+      histories.push(params.history);
+      flags.push(params.webSearchEnabled);
+      params.onSearch?.(sampleSearch);
+      params.onDelta('first');
+    });
+
+    const { result } = renderHook(() => useConceptChat('sess-1', 'node-1'));
+
+    act(() => {
+      result.current.setWebSearchEnabled(true);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage('q1', ['h-1']);
+    });
+
+    streamConceptChatMock.mockImplementation(async (params: {
+      history: ConceptChatMessage[];
+      webSearchEnabled?: boolean;
+      onDelta: (delta: string) => void;
+    }) => {
+      histories.push(params.history);
+      flags.push(params.webSearchEnabled);
+      params.onDelta('second');
+    });
+
+    await act(async () => {
+      await result.current.sendMessage('q2', []);
+    });
+
+    expect(histories[0]).toEqual([]);
+    expect(histories[1]).toEqual([
+      { role: 'user', content: 'q1' },
+      {
+        role: 'assistant',
+        content: 'first',
+        search: sampleSearch,
+      },
+    ]);
+    expect(flags[0]).toBe(true);
+    expect(flags[1]).toBe(true);
+  });
+
+  it('caps history at 10 user+assistant rows without stripping search', async () => {
+    const seed: ConceptChatMessage[] = [
+      { role: 'assistant', content: 'drop-me', search: sampleSearch },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: 'a3' },
+      { role: 'user', content: 'u4' },
+      {
+        role: 'assistant',
+        content: 'keep-search',
+        search: sampleSearch,
+      },
+      { role: 'user', content: 'u5' },
+    ];
+    localStorage.setItem(
+      storageKey('sess-1', 'node-1'),
+      JSON.stringify({
+        messages: seed,
+        lastPromptTimestamp: Date.now(),
+        webSearchEnabled: false,
+      }),
+    );
+
+    let capturedHistory: ConceptChatMessage[] = [];
+    streamConceptChatMock.mockImplementation(async (params: {
+      history: ConceptChatMessage[];
+      onDelta: (delta: string) => void;
+    }) => {
+      capturedHistory = params.history;
+      params.onDelta('new-a');
+    });
+
+    const { result } = renderHook(() => useConceptChat('sess-1', 'node-1'));
+
+    await act(async () => {
+      await result.current.sendMessage('u6', []);
+    });
+
+    expect(capturedHistory).toHaveLength(9);
+    expect(
+      capturedHistory.some((m) => m.content === 'drop-me'),
+    ).toBe(false);
+    const kept = capturedHistory.find((m) => m.content === 'keep-search');
+    expect(kept?.search).toEqual(sampleSearch);
+    expect(capturedHistory.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(
+      true,
+    );
+  });
 });

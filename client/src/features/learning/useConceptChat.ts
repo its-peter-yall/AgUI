@@ -357,22 +357,22 @@ export function useConceptChat(
 				content: trimmed,
 			};
 
-			// Use functional updater to avoid stale messages closure
+			// Use messagesRef so history is ready before streamConceptChat.
 			let historyForRequest: ConceptChatMessage[] = [];
 			const timestamp = Date.now();
 
-			setMessages((prev) => {
-				const updatedWithUser = [...prev, userMessage];
-				historyForRequest = updatedWithUser.slice(
-					-MAX_HISTORY_MESSAGES,
-				);
-				saveToStorage(updatedWithUser, timestamp);
-				return updatedWithUser;
-			});
+			const updatedWithUser = [...messagesRef.current, userMessage];
+			historyForRequest = updatedWithUser.slice(-MAX_HISTORY_MESSAGES);
+			messagesRef.current = updatedWithUser;
+			saveToStorage(updatedWithUser, timestamp);
+			setMessages(updatedWithUser);
 
 			setIsStreaming(true);
 			startStreaming();
 			setError(null);
+			setStreamingStatus(null);
+			setStreamingWarning(null);
+			setStreamingSearch(null);
 
 			// Prepare assistant placeholder
 			const assistantMessage: ConceptChatMessage = {
@@ -393,8 +393,30 @@ export function useConceptChat(
 					sessionId: currentSessionId,
 					nodeId: currentNodeId,
 					message: trimmed,
-					history: historyForRequest.slice(0, -1), // exclude current user msg
+					history: historyForRequest.slice(0, -1),
 					selectedHeadingIds,
+					webSearchEnabled: webSearchEnabledRef.current,
+					onStatus: (status) => {
+						setStreamingStatus(status);
+					},
+					onSearch: (search) => {
+						setStreamingSearch(search);
+						setMessages((prev) => {
+							const updated = [...prev];
+							const last = updated[updated.length - 1];
+							if (last && last.role === "assistant") {
+								updated[updated.length - 1] = {
+									...last,
+									search,
+								};
+							}
+							saveToStorage(updated, timestamp);
+							return updated;
+						});
+					},
+					onWarning: (warning) => {
+						setStreamingWarning(warning);
+					},
 					onDelta: (delta) => {
 						setMessages((prev) => {
 							const updated = [...prev];
