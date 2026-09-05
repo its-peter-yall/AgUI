@@ -172,4 +172,28 @@ describe('streamConceptChat', () => {
       expect(headers[name]).toBeUndefined();
     }
   });
+
+  it('rethrows WebSearchConfigurationError and does not fetch', async () => {
+    buildWebSearchHeadersMock.mockImplementation(() => {
+      throw new WebSearchConfigurationError(
+        'No configured web search providers available',
+      );
+    });
+
+    await expect(
+      streamConceptChat({
+        ...baseParams(),
+        webSearchEnabled: true,
+      }),
+    ).rejects.toThrow(WebSearchConfigurationError);
+
+    await expect(
+      streamConceptChat({
+        ...baseParams(),
+        webSearchEnabled: true,
+      }),
+    ).rejects.toThrow('No configured web search providers available');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
