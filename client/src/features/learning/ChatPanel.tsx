@@ -100,6 +100,7 @@ export function ChatPanel({
 		webSearchEnabled,
 		setWebSearchEnabled,
 		streamingStatus,
+		streamingWarning,
 	} = useConceptChat(sessionId, nodeId, isCourseComplete);
 
 	const canUseWebSearch = hasWebSearchCapability();
@@ -426,6 +427,16 @@ export function ChatPanel({
 							)}
 						</div>
 					))}
+
+						{streamingWarning && (
+							<div
+								className="text-center text-xs text-amber-600 dark:text-amber-400 py-2"
+								role="status"
+								aria-label={streamingWarning}
+							>
+								{streamingWarning}
+							</div>
+						)}
 
 						{error && (
 							<div className="text-center text-xs text-destructive py-2">

@@ -271,4 +271,35 @@ describe("ChatPanel web search", () => {
 			screen.queryByRole("link", { name: "" }),
 		).not.toBeInTheDocument();
 	});
+
+	it("shows the non-fatal web search warning without treating it as a stream error", () => {
+		mocks.hook.streamingWarning =
+			"Web search unavailable; answering from the concept.";
+		mocks.hook.error = null;
+		mocks.hook.messages = [
+			{ role: "user", content: "What is the current API?" },
+			{ role: "assistant", content: "Answering from the concept card." },
+		];
+		renderPanel();
+		expect(
+			screen.getByRole("status", {
+				name: "Web search unavailable; answering from the concept.",
+			}),
+		).toBeInTheDocument();
+		expect(screen.getByTestId("markdown")).toHaveTextContent(
+			"Answering from the concept card.",
+		);
+		expect(screen.queryByText("Chat request failed")).not.toBeInTheDocument();
+	});
+
+	it("still shows a fatal stream error separately from the warning", () => {
+		mocks.hook.streamingWarning =
+			"Web search unavailable; answering from the concept.";
+		mocks.hook.error = "Chat request failed";
+		renderPanel();
+		expect(
+			screen.getByText("Web search unavailable; answering from the concept."),
+		).toBeInTheDocument();
+		expect(screen.getByText("Chat request failed")).toBeInTheDocument();
+	});
 });
