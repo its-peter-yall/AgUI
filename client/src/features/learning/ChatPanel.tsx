@@ -90,6 +90,7 @@ export function ChatPanel({
 		stopStreaming,
 		webSearchEnabled,
 		setWebSearchEnabled,
+		streamingStatus,
 	} = useConceptChat(sessionId, nodeId, isCourseComplete);
 
 	const canUseWebSearch = hasWebSearchCapability();
@@ -372,6 +373,14 @@ export function ChatPanel({
 											content={msg.content}
 											className="text-[15px] leading-relaxed max-w-none"
 										/>
+									) : i === messages.length - 1 &&
+									  streamingStatus === "searching" ? (
+										<div
+											className="text-sm text-muted-foreground py-1"
+											role="status"
+										>
+											Searching the web...
+										</div>
 									) : (
 										<TypingIndicator />
 									)}

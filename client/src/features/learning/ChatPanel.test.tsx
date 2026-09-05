@@ -151,4 +151,41 @@ describe("ChatPanel web search", () => {
 			screen.getByRole("button", { name: "Use web search for this chat" }),
 		).toBeDisabled();
 	});
+
+	it("shows Searching the web... when status is searching and assistant content is empty", () => {
+		mocks.hook.streamingStatus = "searching";
+		mocks.hook.isStreaming = true;
+		mocks.hook.messages = [
+			{ role: "user", content: "What is the current API?" },
+			{ role: "assistant", content: "" },
+		];
+		renderPanel();
+		expect(screen.getByText("Searching the web...")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Thinking")).not.toBeInTheDocument();
+	});
+
+	it("keeps typing dots when streaming without searching status", () => {
+		mocks.hook.streamingStatus = null;
+		mocks.hook.isStreaming = true;
+		mocks.hook.messages = [
+			{ role: "user", content: "Explain this heading" },
+			{ role: "assistant", content: "" },
+		];
+		renderPanel();
+		expect(screen.getByLabelText("Thinking")).toBeInTheDocument();
+		expect(screen.queryByText("Searching the web...")).not.toBeInTheDocument();
+	});
+
+	it("does not show Searching the web... once assistant content exists", () => {
+		mocks.hook.streamingStatus = "searching";
+		mocks.hook.messages = [
+			{ role: "user", content: "What is the current API?" },
+			{ role: "assistant", content: "The current API uses widgets." },
+		];
+		renderPanel();
+		expect(screen.queryByText("Searching the web...")).not.toBeInTheDocument();
+		expect(screen.getByTestId("markdown")).toHaveTextContent(
+			"The current API uses widgets.",
+		);
+	});
 });
