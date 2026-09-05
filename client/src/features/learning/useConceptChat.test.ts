@@ -290,4 +290,83 @@ describe('useConceptChat', () => {
       true,
     );
   });
+
+  it('exposes streaming status, warning, and search without setting error', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    streamConceptChatMock.mockImplementation(async (params: {
+      onStatus?: (status: string) => void;
+      onWarning?: (warning: string) => void;
+      onSearch?: (search: NonNullable<ConceptChatMessage['search']>) => void;
+      onDelta: (delta: string) => void;
+    }) => {
+      params.onStatus?.('searching');
+      params.onWarning?.(SEARCH_UNAVAILABLE_WARNING);
+      params.onSearch?.(sampleSearch);
+      await gate;
+      params.onDelta('From concept.');
+    });
+
+    const { result } = renderHook(() => useConceptChat('sess-1', 'node-1'));
+
+    let sendPromise: Promise<void> = Promise.resolve();
+    act(() => {
+      sendPromise = result.current.sendMessage('q', []);
+    });
+
+    await waitFor(() => {
+      expect(result.current.isStreaming).toBe(true);
+      expect(result.current.streamingStatus).toBe('searching');
+      expect(result.current.streamingWarning).toBe(SEARCH_UNAVAILABLE_WARNING);
+      expect(result.current.streamingSearch).toEqual(sampleSearch);
+      expect(result.current.error).toBeNull();
+    });
+
+    release();
+    await act(async () => {
+      await sendPromise;
+    });
+
+    expect(result.current.isStreaming).toBe(false);
+    expect(result.current.error).toBeNull();
+    expect(result.current.streamingWarning).toBe(SEARCH_UNAVAILABLE_WARNING);
+    expect(result.current.streamingSearch).toEqual(sampleSearch);
+    expect(result.current.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: 'From concept.',
+      search: sampleSearch,
+    });
+  });
+
+  it('surfaces WebSearchConfigurationError on error, not as warning', async () => {
+    streamConceptChatMock.mockRejectedValue(
+      new WebSearchConfigurationError(
+        'No configured web search providers available',
+      ),
+    );
+
+    const { result } = renderHook(() => useConceptChat('sess-1', 'node-1'));
+
+    act(() => {
+      result.current.setWebSearchEnabled(true);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage('q', []);
+    });
+
+    expect(result.current.error).toBe(
+      'No configured web search providers available',
+    );
+    expect(result.current.streamingWarning).toBeNull();
+    expect(result.current.isStreaming).toBe(false);
+    expect(
+      result.current.messages.some(
+        (m) => m.role === 'assistant' && m.content === '',
+      ),
+    ).toBe(false);
+  });
 });
