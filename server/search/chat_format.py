@@ -24,7 +24,10 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from server.search.source_safety import sanitize_source_text
+from server.search.source_safety import (
+    deduplicate_results,
+    sanitize_source_text,
+)
 from server.search.types import NormalizedSearchResult
 
 _CHAT_SEARCH_HIT_LIMIT = 5
@@ -62,6 +65,20 @@ def _clean_publisher(raw: str | None) -> str:
     )
 
 
+def _format_hit(
+    index: int,
+    title: str,
+    url: str,
+    publisher: str,
+    snippet: str,
+) -> str:
+    lines = [f"[{index}] {title}", f"URL: {url}"]
+    if publisher:
+        lines.append(f"Publisher: {publisher}")
+    lines.append(f"Snippet: {snippet}")
+    return "\n".join(lines)
+
+
 def format_chat_search_results(
     query: str,
     results: Sequence[NormalizedSearchResult],
@@ -80,18 +97,19 @@ def format_chat_search_results(
         f'WEB SEARCH RESULTS for: "{query}"\n'
         f"{_CHAT_SEARCH_UNTRUSTED_LINE}"
     )
+    kept = deduplicate_results(results)[:_CHAT_SEARCH_HIT_LIMIT]
     blocks: list[str] = []
     sources: list[dict[str, str]] = []
-    for index, result in enumerate(results, start=1):
+    for index, result in enumerate(kept, start=1):
         title = _clean_title(result.title)
         url = str(result.canonical_url)
         snippet = _clean_snippet(result)
         publisher = _clean_publisher(result.publisher)
-        lines = [f"[{index}] {title}", f"URL: {url}"]
-        if publisher:
-            lines.append(f"Publisher: {publisher}")
-        lines.append(f"Snippet: {snippet}")
-        blocks.append("\n".join(lines))
+        block = _format_hit(index, title, url, publisher, snippet)
+        candidate = "\n\n".join([header, *blocks, block])
+        if len(candidate) > _CHAT_SEARCH_BODY_MAX_CHARS:
+            break
+        blocks.append(block)
         sources.append({"title": title, "url": url})
     if not blocks:
         return header, []
