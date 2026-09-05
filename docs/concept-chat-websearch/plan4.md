@@ -471,17 +471,11 @@ class ConceptChatHistoryTests(unittest.TestCase):
         self.assertEqual(roles, ["system", "assistant", "user"])
         self.assertNotIn("tool", roles)
 
-    def test_invalid_search_treated_as_plain_assistant(self) -> None:
+    def test_missing_search_treated_as_plain_assistant(self) -> None:
         history = [
             ConceptChatMessage(
                 role="assistant",
-                content="Incomplete search blob.",
-                search={
-                    "query": "",
-                    "tool_call_id": "call_x",
-                    "results": FORMATTED_BLOB,
-                    "sources": [],
-                },
+                content="No search field.",
             ),
         ]
         messages = build_concept_chat_messages(
@@ -493,9 +487,12 @@ class ConceptChatHistoryTests(unittest.TestCase):
         )
         roles = [item["role"] for item in messages]
         self.assertEqual(roles, ["system", "assistant", "user"])
-        self.assertEqual(messages[1]["content"], "Incomplete search blob.")
+        self.assertEqual(messages[1]["content"], "No search field.")
+        self.assertNotIn("tool_calls", messages[1])
 
     def test_history_cap_counts_user_assistant_rows_not_expanded(self) -> None:
+        # 11 pairs = 22 rows. Cap is 10 rows, so the oldest pair
+        # (user-0 + asst-0 with search) is dropped.
         history: list[ConceptChatMessage] = []
         for index in range(MAX_CHAT_HISTORY_MESSAGES + 1):
             history.append(
@@ -518,42 +515,6 @@ class ConceptChatHistoryTests(unittest.TestCase):
             selected_heading_ids=[],
             node_title="X",
         )
-        non_system = messages[1:]
-        user_contents = [
-            item["content"]
-            for item in non_system
-            if item["role"] == "user" and item["content"] != "now"
-        ]
-        self.assertNotIn("user-0", user_contents)
-        self.assertIn("user-1", user_contents)
-        dropped_oldest_search = any(
-            item.get("tool_call_id") == "call_abc123"
-            and item["role"] == "tool"
-            and "user-0" in json.dumps(messages)
-            for item in messages
-        )
-        self.assertFalse(
-            any(
-                item["role"] == "user" and item["content"] == "user-0"
-                for item in messages
-            )
-        )
-        self.assertEqual(
-            sum(1 for item in non_system if item["role"] == "user"),
-            MAX_CHAT_HISTORY_MESSAGES + 1,
-        )
-```
-
-If Plan 1 rejects empty `query` at validation time, rewrite `test_invalid_search_treated_as_plain_assistant` to use `search=None` plus a comment that empty query cannot be constructed — **and** still assert `search=None` is plain assistant. Do not set `extra='forbid'` on the schema.
-
-The cap test asserts the oldest user row (`user-0`) is gone. Because each loop iteration adds 2 messages, `history[-10:]` keeps the last 10 of 22 rows (11 user+assistant pairs plus extras). Recheck arithmetic:
-
-- 11 iterations → 22 messages.
-- `history[-10:]` → last 10 rows = user-6..asst-10 mixed. Oldest `user-0` definitely dropped.
-
-Simpler cap assertion (replace the fragile `MAX_CHAT_HISTORY_MESSAGES + 1` user count if it fails math): assert `"user-0"` absent and last history user present:
-
-```python
         self.assertFalse(
             any(
                 item["role"] == "user" and item["content"] == "user-0"
@@ -566,11 +527,11 @@ Simpler cap assertion (replace the fragile `MAX_CHAT_HISTORY_MESSAGES + 1` user 
                 for item in messages
             )
         )
-        tool_roles = [item["role"] for item in messages if item["role"] == "tool"]
-        self.assertEqual(tool_roles, [])
+        self.assertEqual(
+            [item["role"] for item in messages if item["role"] == "tool"],
+            [],
+        )
 ```
-
-Use **this simpler cap test body** instead of the `sum(...)` version above. Oldest pair is dropped so the only search blob (index 0) is gone — zero `tool` roles.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1231,6 +1192,34 @@ Add to `ConceptChatToolLoopTests`:
             if isinstance(item, dict)
         ]
         self.assertEqual(statuses.count("searching"), 1)
+
+    async def test_thinking_extra_body_on_both_tool_rounds(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(_web_search_stream("LangChain BaseTool")),
+                FakeStream(_answer_stream("ok")),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+            return_value=search_response,
+        ), patch(
+            "server.services.concept_chat.format_chat_search_results",
+            return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
+        ):
+            _events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+                thinking_enabled=True,
+                thinking_effort="medium",
+            )
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        expected = {"reasoning": {"effort": "medium"}}
+        for call in client.chat.completions.create.call_args_list:
+            self.assertEqual(call.kwargs.get("extra_body"), expected)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1521,25 +1510,29 @@ git commit -m "feat(concept-chat): stream web_search tool loop with round-2 none
 Add to `ConceptChatToolLoopTests`:
 
 ```python
-    async def _fallback_case(self, one_shot_side_effect: Any) -> list[Any]:
+    async def _run_fallback(
+        self,
+        *,
+        one_shot: Any,
+        raises: bool,
+    ) -> None:
         client = _make_client(
             [
                 FakeStream(_web_search_stream("LangChain BaseTool")),
                 FakeStream(_answer_stream("Concept fallback.")),
             ]
         )
+        mock_kwargs: dict[str, Any] = {"new_callable": AsyncMock}
+        if raises:
+            mock_kwargs["side_effect"] = one_shot
+        else:
+            mock_kwargs["return_value"] = one_shot
         with patch(
             "server.services.concept_chat.one_shot_chat_search",
-            new_callable=AsyncMock,
-            side_effect=one_shot_side_effect,
-        ) as one_shot, patch(
+            **mock_kwargs,
+        ), patch(
             "server.services.concept_chat.format_chat_search_results",
         ) as formatter:
-            if not isinstance(one_shot_side_effect, Exception) and not (
-                callable(one_shot_side_effect)
-            ):
-                one_shot.return_value = one_shot_side_effect
-                one_shot.side_effect = None
             events, client = await _run_chat(
                 client,
                 search_context=_enabled_context(),
@@ -1549,50 +1542,52 @@ Add to `ConceptChatToolLoopTests`:
         round2 = client.chat.completions.create.call_args_list[1].kwargs
         self.assertEqual(round2["tools"], [WEB_SEARCH_TOOL])
         self.assertEqual(round2["tool_choice"], "none")
-        roles = [item["role"] for item in round2["messages"]]
-        self.assertNotIn("tool", roles)
+        self.assertNotIn(
+            "tool",
+            [item["role"] for item in round2["messages"]],
+        )
         self.assertIn({"warning": SEARCH_WARNING}, events)
         self.assertIn({"delta": "Concept fallback."}, events)
         self.assertEqual(events[-1], "[DONE]")
-        self.assertTrue(
+        self.assertNotIn("tvly-test", json.dumps(events))
+        self.assertFalse(
             any(
-                isinstance(item, dict) and item.get("status") == "searching"
+                isinstance(item, dict) and "error" in item
                 for item in events
             )
         )
-        error_events = [
-            item for item in events
-            if isinstance(item, dict) and "error" in item
-        ]
-        self.assertEqual(error_events, [])
-        return events
 
     async def test_empty_hits_warning_and_no_tool_message(self) -> None:
         empty = MagicMock()
         empty.results = []
-        await self._fallback_case(empty)
+        await self._run_fallback(one_shot=empty, raises=False)
 
     async def test_all_providers_unavailable_warning(self) -> None:
         from server.search.types import AllProvidersUnavailable
 
-        await self._fallback_case(
-            AllProvidersUnavailable(
+        await self._run_fallback(
+            one_shot=AllProvidersUnavailable(
                 provider_ids=(SearchProviderId.TAVILY,),
-            )
+            ),
+            raises=True,
         )
 
     async def test_auth_search_error_warning(self) -> None:
         from server.search.types import SearchError, SearchErrorClass
 
-        await self._fallback_case(
-            SearchError(
+        await self._run_fallback(
+            one_shot=SearchError(
                 provider_id=SearchProviderId.TAVILY,
                 error_class=SearchErrorClass.AUTHENTICATION,
-            )
+            ),
+            raises=True,
         )
 
     async def test_ledger_overflow_warning(self) -> None:
-        await self._fallback_case(RuntimeError("search call cap exceeded"))
+        await self._run_fallback(
+            one_shot=RuntimeError("search call cap exceeded"),
+            raises=True,
+        )
 
     async def test_bad_tool_arguments_warning_without_search(self) -> None:
         client = _make_client(
@@ -1662,95 +1657,6 @@ Add to `ConceptChatToolLoopTests`:
         ]
         self.assertEqual(deltas, ["Concept fallback."])
 ```
-
-Fix `_fallback_case`: `AsyncMock(side_effect=empty_mock)` would iterate a MagicMock. Use this helper instead of the mixed side_effect version:
-
-```python
-    async def _run_fallback(
-        self,
-        *,
-        one_shot: Any,
-        raises: bool,
-    ) -> None:
-        client = _make_client(
-            [
-                FakeStream(_web_search_stream("LangChain BaseTool")),
-                FakeStream(_answer_stream("Concept fallback.")),
-            ]
-        )
-        mock_kwargs: dict[str, Any] = {"new_callable": AsyncMock}
-        if raises:
-            mock_kwargs["side_effect"] = one_shot
-        else:
-            mock_kwargs["return_value"] = one_shot
-        with patch(
-            "server.services.concept_chat.one_shot_chat_search",
-            **mock_kwargs,
-        ), patch(
-            "server.services.concept_chat.format_chat_search_results",
-        ) as formatter:
-            events, client = await _run_chat(
-                client,
-                search_context=_enabled_context(),
-            )
-        formatter.assert_not_called()
-        self.assertEqual(client.chat.completions.create.await_count, 2)
-        round2 = client.chat.completions.create.call_args_list[1].kwargs
-        self.assertEqual(round2["tools"], [WEB_SEARCH_TOOL])
-        self.assertEqual(round2["tool_choice"], "none")
-        self.assertNotIn(
-            "tool",
-            [item["role"] for item in round2["messages"]],
-        )
-        self.assertIn({"warning": SEARCH_WARNING}, events)
-        self.assertIn({"delta": "Concept fallback."}, events)
-        self.assertEqual(events[-1], "[DONE]")
-        self.assertNotIn("tvly-test", json.dumps(events))
-        self.assertFalse(
-            any(
-                isinstance(item, dict) and "error" in item
-                for item in events
-            )
-        )
-```
-
-Then:
-
-```python
-    async def test_empty_hits_warning_and_no_tool_message(self) -> None:
-        empty = MagicMock()
-        empty.results = []
-        await self._run_fallback(one_shot=empty, raises=False)
-
-    async def test_all_providers_unavailable_warning(self) -> None:
-        from server.search.types import AllProvidersUnavailable
-
-        await self._run_fallback(
-            one_shot=AllProvidersUnavailable(
-                provider_ids=(SearchProviderId.TAVILY,),
-            ),
-            raises=True,
-        )
-
-    async def test_auth_search_error_warning(self) -> None:
-        from server.search.types import SearchError, SearchErrorClass
-
-        await self._run_fallback(
-            one_shot=SearchError(
-                provider_id=SearchProviderId.TAVILY,
-                error_class=SearchErrorClass.AUTHENTICATION,
-            ),
-            raises=True,
-        )
-
-    async def test_ledger_overflow_warning(self) -> None:
-        await self._run_fallback(
-            one_shot=RuntimeError("search call cap exceeded"),
-            raises=True,
-        )
-```
-
-**Use `_run_fallback` plus the bad-args / unknown-name tests. Do not implement `_fallback_case`.**
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2076,31 +1982,7 @@ def _is_tools_rejected(exc: BaseException) -> bool:
     )
 ```
 
-Wrap each `create()`:
-
-```python
-    async def _create_with_optional_retry(
-        kwargs: dict[str, Any],
-    ) -> Any:
-        try:
-            return await client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            if (
-                kwargs.get("tools")
-                and _is_tools_rejected(exc)
-            ):
-                yield_warning = True
-                fallback = dict(kwargs)
-                fallback.pop("tools", None)
-                fallback.pop("tool_choice", None)
-                fallback.pop("parallel_tool_calls", None)
-                # Caller yields warning; we cannot yield from here
-                # unless this is inlined in the generator.
-                raise _ToolsRejected(exc, fallback)
-            raise
-```
-
-Do **not** use a nested generator if it fights `AsyncGenerator`. Inline in `stream_concept_chat`:
+Inline the retry in `stream_concept_chat` around **round 1** `create()`:
 
 ```python
         create_kwargs = _round_kwargs(messages, tool_choice="auto")
@@ -2114,18 +1996,24 @@ Do **not** use a nested generator if it fights `AsyncGenerator`. Inline in `stre
                 fallback.pop("tool_choice", None)
                 fallback.pop("parallel_tool_calls", None)
                 stream = await client.chat.completions.create(**fallback)
-            else:
-                logger.error("Concept chat stream failed: %s", exc)
-                yield _sse({"error": str(exc)})
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            yield _sse({"delta": delta.content})
                 yield "data: [DONE]\n\n"
                 return
+            logger.error("Concept chat stream failed: %s", exc)
+            yield _sse({"error": str(exc)})
+            yield "data: [DONE]\n\n"
+            return
 ```
 
-After a tools-rejected retry on **round 1**, consume the fallback stream as **content-only** (emit deltas, `[DONE]`, return). Do not parse tool_calls from the fallback (it has no tools). Do not start round 2.
+After a tools-rejected retry on round 1: content-only consume, `[DONE]`, return. Do not parse tool_calls. Do not start round 2.
 
-Apply the same reject handler to **round 2 create**. If round 2 rejects tools, yield warning (only if not already yielded this turn — yielding twice is acceptable per locked copy; prefer once). Retry round 2 without tools and stream content. Do not 500.
+Copy the same except-block around **round 2** `create()`. If round 2 rejects tools, yield the warning, retry that create without tools, stream content. Do not 500.
 
-One retry per create. If the fallback create fails, use the existing `{"error": str(e)}` path.
+One retry per create. If the fallback create itself fails, use `{"error": str(exc)}` then `[DONE]`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2154,91 +2042,18 @@ git commit -m "feat(concept-chat): retry without tools when provider rejects the
 
 - [ ] **Step 1: Write the failing cache-with-tools tests**
 
-Add to `TestConceptChatCaching` in `server/tests/test_concept_chat_cache.py`:
+Keep cache tests standalone (do not import `test_concept_chat_loop`). Add helpers next to `_chunk` in `server/tests/test_concept_chat_cache.py`:
 
 ```python
-    def test_cache_control_on_both_rounds_when_tools_used(self) -> None:
-        from server.schemas.search import SearchContext
-        from server.search.types import SearchProviderId
-        from unittest.mock import patch as patch_fn
+import json
 
-        from server.tests.test_concept_chat_loop import (
-            FORMATTED_BLOB,
-            FORMATTED_SOURCES,
-            FakeStream,
-            _answer_stream,
-            _enabled_context,
-            _web_search_stream,
-        )
+from server.schemas.search import SearchContext
+from server.search.types import SearchProviderId
 
-        client = MagicMock()
-        client.chat.completions.create = AsyncMock(
-            side_effect=[
-                FakeStream(_web_search_stream("LangChain BaseTool")),
-                FakeStream(_answer_stream("cached.")),
-            ]
-        )
-        search_response = MagicMock()
-        search_response.results = [object()]
 
-        async def go():
-            with patch(
-                "server.services.concept_chat._get_client",
-                return_value=client,
-            ), patch(
-                "server.services.concept_chat.one_shot_chat_search",
-                new_callable=AsyncMock,
-                return_value=search_response,
-            ), patch(
-                "server.services.concept_chat.format_chat_search_results",
-                return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
-            ):
-                async for _ in stream_concept_chat(
-                    api_key="k",
-                    model_slug="anthropic/claude-sonnet-4",
-                    message="What is this about?",
-                    history=[],
-                    content_markdown="LONG STABLE CONCEPT CONTENT " * 50,
-                    selected_heading_ids=[],
-                    node_title="Test Node",
-                    provider="openrouter",
-                    search_context=_enabled_context(),
-                ):
-                    pass
-
-        asyncio.run(go())
-        self.assertEqual(client.chat.completions.create.await_count, 2)
-        for index, call in enumerate(
-            client.chat.completions.create.call_args_list
-        ):
-            sys_msg = call.kwargs["messages"][0]
-            self.assertIsInstance(sys_msg["content"], list, msg=index)
-            self.assertEqual(
-                sys_msg["content"][0]["cache_control"],
-                {"type": "ephemeral"},
-                msg=index,
-            )
-            # No extra breakpoint on non-system messages.
-            for message in call.kwargs["messages"][1:]:
-                content = message.get("content")
-                if isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict):
-                            self.assertNotIn("cache_control", part)
-
-    def test_cache_control_absent_for_gc_even_with_tools_retry_path(self) -> None:
-        messages = self._run("generalcompute", "anthropic/claude-sonnet-4")
-        sys_msg = messages[0]
-        self.assertIsInstance(sys_msg["content"], str)
-        self.assertNotIn("cache_control", sys_msg)
-```
-
-Avoid importing from `test_concept_chat_loop` if that creates a cycle. Duplicate the tiny FakeStream/_web_search_stream helpers in the cache file instead (copy `_content_chunk`/`_tool_delta_chunk`/`_web_search_stream`/`FORMATTED_*` locally into `test_concept_chat_cache.py`). **Preferred: duplicate the stream stubs in the cache test file** so cache tests stay standalone.
-
-Standalone version (put helpers at the bottom of `test_concept_chat_cache.py` or next to `_chunk`):
-
-```python
-def _tool_delta_chunk(index, call_id=None, name=None, arguments=None):
+def _tool_delta_chunk(
+    index, call_id=None, name=None, arguments=None
+):
     function = MagicMock()
     function.name = name
     function.arguments = arguments
@@ -2255,11 +2070,93 @@ def _tool_delta_chunk(index, call_id=None, name=None, arguments=None):
     chunk = MagicMock()
     chunk.choices = [choice]
     return chunk
+
+
+def _tool_stream(query="LangChain BaseTool"):
+    encoded = json.dumps({"query": query})
+    mid = max(1, len(encoded) // 2)
+    return [
+        _tool_delta_chunk(
+            0,
+            call_id="call_abc123",
+            name="web_search",
+            arguments="",
+        ),
+        _tool_delta_chunk(0, arguments=encoded[:mid]),
+        _tool_delta_chunk(0, arguments=encoded[mid:]),
+    ]
 ```
 
-And construct `_enabled_context` inline with `SearchContext.from_plaintext_credentials`.
+Add this method to `TestConceptChatCaching`. Existing cache tests (`test_openrouter_anthropic_has_cache_control`, `test_openrouter_openai_no_cache_control`, `test_generalcompute_no_cache_control`, thinking tests) stay unchanged and must keep passing.
 
-Existing tests `test_openrouter_anthropic_has_cache_control`, `test_openrouter_openai_no_cache_control`, `test_generalcompute_no_cache_control`, thinking tests must keep passing (they do not pass `search_context`).
+```python
+    def test_cache_control_on_both_rounds_when_tools_used(self) -> None:
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                FakeStream(_tool_stream()),
+                FakeStream([_chunk("cached.")]),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        context = SearchContext.from_plaintext_credentials(
+            enabled=True,
+            provider_ids=[SearchProviderId.TAVILY],
+            credentials={SearchProviderId.TAVILY: "tvly-test"},
+        )
+        blob = 'WEB SEARCH RESULTS for: "LangChain BaseTool"\n'
+        sources = [
+            {
+                "title": "BaseTool",
+                "url": "https://python.langchain.com/docs",
+            }
+        ]
+
+        async def go():
+            with patch(
+                "server.services.concept_chat._get_client",
+                return_value=client,
+            ), patch(
+                "server.services.concept_chat.one_shot_chat_search",
+                new_callable=AsyncMock,
+                return_value=search_response,
+            ), patch(
+                "server.services.concept_chat.format_chat_search_results",
+                return_value=(blob, sources),
+            ):
+                async for _ in stream_concept_chat(
+                    api_key="k",
+                    model_slug="anthropic/claude-sonnet-4",
+                    message="What is this about?",
+                    history=[],
+                    content_markdown="LONG STABLE CONCEPT CONTENT " * 50,
+                    selected_heading_ids=[],
+                    node_title="Test Node",
+                    provider="openrouter",
+                    search_context=context,
+                ):
+                    pass
+
+        asyncio.run(go())
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        for index, call in enumerate(
+            client.chat.completions.create.call_args_list
+        ):
+            sys_msg = call.kwargs["messages"][0]
+            self.assertIsInstance(sys_msg["content"], list, msg=index)
+            self.assertEqual(
+                sys_msg["content"][0]["cache_control"],
+                {"type": "ephemeral"},
+                msg=index,
+            )
+            for message in call.kwargs["messages"][1:]:
+                content = message.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            self.assertNotIn("cache_control", part)
+```
 
 - [ ] **Step 2: Run test to verify it fails**
 
