@@ -717,3 +717,58 @@ class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(item, dict) and "delta" in item
         ]
         self.assertEqual(deltas, ["Concept fallback."])
+
+    async def test_two_tool_calls_execute_first_web_search_only(self) -> None:
+        first = json.dumps({"query": "first query"})
+        second = json.dumps({"query": "second query"})
+        round1 = [
+            _tool_delta_chunk(
+                index=0,
+                call_id="call_one",
+                name="web_search",
+                arguments=first,
+            ),
+            _tool_delta_chunk(
+                index=1,
+                call_id="call_two",
+                name="web_search",
+                arguments=second,
+            ),
+        ]
+        client = _make_client(
+            [
+                FakeStream(round1),
+                FakeStream(_answer_stream("Once.")),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+            return_value=search_response,
+        ) as one_shot, patch(
+            "server.services.concept_chat.format_chat_search_results",
+            return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
+        ):
+            events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        one_shot.assert_awaited_once()
+        self.assertEqual(one_shot.await_args.args[1], "first query")
+        search_events = [
+            item["search"]
+            for item in events
+            if isinstance(item, dict) and "search" in item
+        ]
+        self.assertEqual(len(search_events), 1)
+        self.assertEqual(search_events[0]["query"], "first query")
+        self.assertEqual(search_events[0]["tool_call_id"], "call_one")
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        round2 = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(round2["tool_choice"], "none")
+        self.assertEqual(
+            round2["messages"][-2]["tool_calls"][0]["id"],
+            "call_one",
+        )
