@@ -15,10 +15,12 @@
  *
  * KEY COMPONENTS:
  *    - streamConceptChat(): Streams chat deltas from the backend SSE endpoint
+ *    - webSearchEnabled: Optional globe flag; attaches X-Web-Search* headers
  *
  * DEPENDENCIES:
  *    - External: None (native fetch API)
- *    - Internal: @/types/learning, @/lib/providerSettings, @/lib/providerApi
+ *    - Internal: @/types/learning, @/lib/providerSettings, @/lib/providerApi,
+ *      @/lib/webSearchHeaders
  *
  * USAGE:
  *    ```ts
@@ -28,6 +30,7 @@
  *      message: 'Explain this',
  *      history: [],
  *      selectedHeadingIds: ['h-1'],
+ *      webSearchEnabled: true,
  *      onDelta: (text) => setBuffer((prev) => prev + text),
  *      signal: abortController.signal,
  *    });
@@ -38,6 +41,10 @@
 import { getProviderSettings } from "./providerSettings";
 import { buildProviderHeaders } from "./providerApi";
 import type { ConceptChatMessage } from "@/types/learning";
+import {
+	buildWebSearchHeaders,
+	WebSearchConfigurationError,
+} from "./webSearchHeaders";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -48,6 +55,12 @@ interface StreamConceptChatParams {
 	history: ConceptChatMessage[];
 	selectedHeadingIds: string[];
 	onDelta: (delta: string) => void;
+	webSearchEnabled?: boolean;
+	onStatus?: (status: string) => void;
+	onSearch?: (
+		search: NonNullable<ConceptChatMessage["search"]>,
+	) => void;
+	onWarning?: (warning: string) => void;
 	signal?: AbortSignal;
 }
 
@@ -65,6 +78,7 @@ export async function streamConceptChat({
 	history,
 	selectedHeadingIds,
 	onDelta,
+	webSearchEnabled = false,
 	signal,
 }: StreamConceptChatParams): Promise<void> {
 	const settings = getProviderSettings();
@@ -92,15 +106,28 @@ export async function streamConceptChat({
 
 	const url = `${BASE_URL}/learning/sessions/${sessionId}/nodes/${nodeId}/chat`;
 
+	const headers: Record<string, string> = {
+		"Content-Type": "application/json",
+		...providerHeaders,
+		"X-Provider-Api-Key": chatProviderConfig.apiKey,
+		"X-Model": chatProviderConfig.model || "",
+		"X-Chat-Model": chatModel,
+	};
+
+	if (webSearchEnabled) {
+		try {
+			Object.assign(headers, buildWebSearchHeaders(true));
+		} catch (err) {
+			if (err instanceof WebSearchConfigurationError) {
+				throw err;
+			}
+			throw err;
+		}
+	}
+
 	const response = await fetch(url, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			...providerHeaders,
-			"X-Provider-Api-Key": chatProviderConfig.apiKey,
-			"X-Model": chatProviderConfig.model || "",
-			"X-Chat-Model": chatModel,
-		},
+		headers,
 		body: JSON.stringify({
 			message,
 			history,
