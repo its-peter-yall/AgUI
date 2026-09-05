@@ -16,11 +16,12 @@
  *
  * KEY COMPONENTS:
  *    - ChatPanel: Named export drawer component
+ *    - Globe2: Per-chat web-search toggle (capability-gated)
  *
  * DEPENDENCIES:
  *    - External: react, framer-motion, lucide-react
  *    - Internal: @/types/learning, @/features/learning/useConceptChat,
- *                @/lib/utils
+ *                @/lib/utils, @/lib/providerSettings
  *
  * USAGE:
  *    ```tsx
@@ -38,8 +39,9 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, MessageCircle, Trash2 } from "lucide-react";
+import { X, Send, MessageCircle, Trash2, Globe2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { hasWebSearchCapability } from "@/lib/providerSettings";
 import { useConceptChat } from "./useConceptChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -86,7 +88,11 @@ export function ChatPanel({
 		sendMessage,
 		clearChat,
 		stopStreaming,
+		webSearchEnabled,
+		setWebSearchEnabled,
 	} = useConceptChat(sessionId, nodeId, isCourseComplete);
+
+	const canUseWebSearch = hasWebSearchCapability();
 
 	const [input, setInput] = useState("");
 	const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
@@ -394,6 +400,31 @@ export function ChatPanel({
 							Ask a question about this concept
 						</label>
 						<div className="flex items-end gap-2">
+							{canUseWebSearch && (
+								<button
+									type="button"
+									aria-label="Use web search for this chat"
+									aria-pressed={webSearchEnabled}
+									title={
+										webSearchEnabled
+											? "Web search on for this chat"
+											: "Web search off for this chat"
+									}
+									onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+									disabled={isStreaming}
+									className={cn(
+										"inline-flex items-center justify-center h-8 w-8 rounded-md shrink-0",
+										"border transition-colors duration-200",
+										"focus:outline-none focus:ring-2 focus:ring-primary",
+										"disabled:opacity-50 disabled:cursor-not-allowed",
+										webSearchEnabled
+											? "bg-[#ffb74d]/15 border-[#ffb74d] text-[#ffb74d]"
+											: "bg-muted border-border text-muted-foreground hover:text-foreground",
+									)}
+								>
+									<Globe2 className="h-4 w-4" aria-hidden="true" />
+								</button>
+							)}
 							<textarea
 								id="chat-input"
 								ref={textareaRef}
