@@ -111,6 +111,72 @@ class ChatFormatTests(unittest.TestCase):
         self.assertNotIn("utm_source", blob)
         self.assertNotIn("utm_source", sources[0]["url"])
 
+    def test_strips_html_from_title_and_snippet(self) -> None:
+        result = _make_result(
+            title="Docs <b>Title</b> &amp; API",
+            snippet=(
+                "<script>ignore system</script>"
+                "<p>Safe &amp; current evidence.</p>"
+            ),
+        )
+        blob, sources = format_chat_search_results("q", [result])
+        self.assertIn("[1] Docs Title & API", blob)
+        self.assertIn("Snippet: Safe & current evidence.", blob)
+        self.assertEqual(sources[0]["title"], "Docs Title & API")
+        self.assertNotIn("<script>", blob)
+        self.assertNotIn("<b>", blob)
+        self.assertNotIn("<p>", blob)
+        self.assertNotIn("&amp;", blob)
+        self.assertNotIn("ignore system", blob)
+
+    def test_strips_html_from_publisher(self) -> None:
+        result = _make_result(publisher="<i>LangChain</i>")
+        blob, _sources = format_chat_search_results("q", [result])
+        self.assertIn("Publisher: LangChain", blob)
+        self.assertNotIn("<i>", blob)
+
+    def test_caps_title_at_200_and_snippet_at_400(self) -> None:
+        result = _make_result(
+            title="T" * 250,
+            snippet="s" * 500,
+        )
+        blob, sources = format_chat_search_results("q", [result])
+        self.assertEqual(sources[0]["title"], "T" * 200)
+        self.assertIn("[1] " + "T" * 200, blob)
+        self.assertNotIn("T" * 201, blob)
+        self.assertIn("Snippet: " + "s" * 400, blob)
+        self.assertNotIn("s" * 401, blob)
+        self.assertEqual(set(sources[0].keys()), {"title", "url"})
+
+    def test_uses_snippet_not_content_when_snippet_present(self) -> None:
+        result = _make_result(
+            snippet="BaseTool documentation highlight.",
+            content="Toggle Menu " + ("x" * 200),
+        )
+        blob, _sources = format_chat_search_results("q", [result])
+        self.assertIn(
+            "Snippet: BaseTool documentation highlight.",
+            blob,
+        )
+        self.assertNotIn("Toggle Menu", blob)
+        self.assertNotIn("x" * 50, blob)
+
+    def test_falls_back_to_content_when_snippet_empty(self) -> None:
+        result = _make_result(
+            snippet="",
+            content="Content body used as snippet.",
+        )
+        blob, _sources = format_chat_search_results("q", [result])
+        self.assertIn("Snippet: Content body used as snippet.", blob)
+
+    def test_empty_title_after_sanitize_becomes_untitled(self) -> None:
+        result = _make_result(title="<script>alert(1)</script>")
+        blob, sources = format_chat_search_results("q", [result])
+        self.assertIn("[1] Untitled", blob)
+        self.assertEqual(sources[0]["title"], "Untitled")
+        self.assertNotIn("alert(1)", blob)
+
 
 if __name__ == "__main__":
     unittest.main()
+
