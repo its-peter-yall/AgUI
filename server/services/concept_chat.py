@@ -46,6 +46,7 @@ from server.database.storage_registry import (
 from server.schemas.learning import ConceptChatMessage
 from server.schemas.search import SearchContext
 from server.search.chat_format import format_chat_search_results
+from server.search.types import AllProvidersUnavailable, SearchError
 from server.services.concept_chat_search import (
     WEB_SEARCH_TOOL,
     one_shot_chat_search,
@@ -443,12 +444,12 @@ async def stream_concept_chat(
                 kwargs["tool_choice"] = "none"
         return kwargs
 
+    content_parts: list[str] = []
+    slots: dict[int, dict[str, Any]] = {}
     try:
         stream = await client.chat.completions.create(
             **_round_kwargs(messages, tool_choice="auto")
         )
-        content_parts: list[str] = []
-        slots: dict[int, dict[str, Any]] = {}
         async for chunk in stream:
             if not chunk.choices:
                 continue
@@ -464,23 +465,35 @@ async def stream_concept_chat(
                     became = _merge_tool_call_delta(slots, tool_call)
                     if became:
                         yield _sse({"status": "searching"})
+    except Exception as e:
+        logger.error("Concept chat stream failed: %s", e)
+        yield _sse({"error": str(e)})
+        yield "data: [DONE]\n\n"
+        return
 
-        if not slots:
-            for part in content_parts:
-                yield _sse({"delta": part})
-            yield "data: [DONE]\n\n"
-            return
+    if not slots:
+        for part in content_parts:
+            yield _sse({"delta": part})
+        yield "data: [DONE]\n\n"
+        return
 
-        slot = _first_web_search(slots)
-        query = (
-            _parse_web_search_query(slot["arguments"]) if slot else None
-        )
-        tool_call_id = slot.get("id") if slot else None
-        if slot and query and tool_call_id and search_context is not None:
+    slot = _first_web_search(slots)
+    query = (
+        _parse_web_search_query(slot["arguments"]) if slot else None
+    )
+    tool_call_id = slot.get("id") if slot else None
+    if not (slot and query and tool_call_id):
+        yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
+    elif search_context is None:
+        yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
+    else:
+        try:
             response = await one_shot_chat_search(
                 search_context,
                 query,
             )
+            if not response.results:
+                raise RuntimeError("empty search results")
             blob, sources = format_chat_search_results(
                 query,
                 response.results,
@@ -496,14 +509,26 @@ async def stream_concept_chat(
                 }
             )
             messages = messages + [
-                _assistant_tool_call_message(tool_call_id, query),
+                _assistant_tool_call_message(
+                    tool_call_id, query
+                ),
                 {
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "content": blob,
                 },
             ]
+        except (
+            SearchError,
+            AllProvidersUnavailable,
+            Exception,
+        ):
+            logger.warning(
+                "Concept chat web search failed; answering from concept"
+            )
+            yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
 
+    try:
         stream2 = await client.chat.completions.create(
             **_round_kwargs(messages, tool_choice="none")
         )

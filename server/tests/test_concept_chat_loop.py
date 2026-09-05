@@ -570,3 +570,150 @@ class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
         expected = {"reasoning": {"effort": "medium"}}
         for call in client.chat.completions.create.call_args_list:
             self.assertEqual(call.kwargs.get("extra_body"), expected)
+
+    async def _run_fallback(
+        self,
+        *,
+        one_shot: Any,
+        raises: bool,
+    ) -> None:
+        client = _make_client(
+            [
+                FakeStream(_web_search_stream("LangChain BaseTool")),
+                FakeStream(_answer_stream("Concept fallback.")),
+            ]
+        )
+        mock_kwargs: dict[str, Any] = {"new_callable": AsyncMock}
+        if raises:
+            mock_kwargs["side_effect"] = one_shot
+        else:
+            mock_kwargs["return_value"] = one_shot
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            **mock_kwargs,
+        ), patch(
+            "server.services.concept_chat.format_chat_search_results",
+        ) as formatter:
+            events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        formatter.assert_not_called()
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        round2 = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(round2["tools"], [WEB_SEARCH_TOOL])
+        self.assertEqual(round2["tool_choice"], "none")
+        self.assertNotIn(
+            "tool",
+            [item["role"] for item in round2["messages"]],
+        )
+        self.assertIn({"warning": SEARCH_WARNING}, events)
+        self.assertIn({"delta": "Concept fallback."}, events)
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertNotIn("tvly-test", json.dumps(events))
+        self.assertFalse(
+            any(
+                isinstance(item, dict) and "error" in item
+                for item in events
+            )
+        )
+
+    async def test_empty_hits_warning_and_no_tool_message(self) -> None:
+        empty = MagicMock()
+        empty.results = []
+        await self._run_fallback(one_shot=empty, raises=False)
+
+    async def test_all_providers_unavailable_warning(self) -> None:
+        from server.search.types import AllProvidersUnavailable
+
+        await self._run_fallback(
+            one_shot=AllProvidersUnavailable(
+                provider_ids=(SearchProviderId.TAVILY,),
+            ),
+            raises=True,
+        )
+
+    async def test_auth_search_error_warning(self) -> None:
+        from server.search.types import SearchError, SearchErrorClass
+
+        await self._run_fallback(
+            one_shot=SearchError(
+                provider_id=SearchProviderId.TAVILY,
+                error_class=SearchErrorClass.AUTHENTICATION,
+            ),
+            raises=True,
+        )
+
+    async def test_ledger_overflow_warning(self) -> None:
+        await self._run_fallback(
+            one_shot=RuntimeError("search call cap exceeded"),
+            raises=True,
+        )
+
+    async def test_bad_tool_arguments_warning_without_search(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(
+                    [
+                        _tool_delta_chunk(
+                            index=0,
+                            call_id="call_bad",
+                            name="web_search",
+                            arguments="{not-json",
+                        ),
+                    ]
+                ),
+                FakeStream(_answer_stream("Concept fallback.")),
+            ]
+        )
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+        ) as one_shot:
+            events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        one_shot.assert_not_awaited()
+        self.assertIn({"warning": SEARCH_WARNING}, events)
+        self.assertIn({"status": "searching"}, events)
+        round2 = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(round2["tool_choice"], "none")
+        self.assertNotIn(
+            "tool",
+            [item["role"] for item in round2["messages"]],
+        )
+
+    async def test_unknown_tool_name_warning_no_searching(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(
+                    [
+                        _tool_delta_chunk(
+                            index=0,
+                            call_id="call_other",
+                            name="not_a_search",
+                            arguments='{"query":"x"}',
+                        ),
+                    ]
+                ),
+                FakeStream(_answer_stream("Concept fallback.")),
+            ]
+        )
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+        ) as one_shot:
+            events, _client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        one_shot.assert_not_awaited()
+        self.assertIn({"warning": SEARCH_WARNING}, events)
+        self.assertNotIn({"status": "searching"}, events)
+        deltas = [
+            item.get("delta")
+            for item in events
+            if isinstance(item, dict) and "delta" in item
+        ]
+        self.assertEqual(deltas, ["Concept fallback."])
