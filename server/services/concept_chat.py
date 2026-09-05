@@ -183,6 +183,50 @@ def build_concept_chat_messages(
 
     capped_history = history[-MAX_CHAT_HISTORY_MESSAGES:]
     for h in capped_history:
+        search = getattr(h, "search", None)
+        tool_call_id = (
+            getattr(search, "tool_call_id", None) if search else None
+        )
+        query = getattr(search, "query", None) if search else None
+        results = getattr(search, "results", None) if search else None
+        if (
+            h.role == "assistant"
+            and tool_call_id
+            and query
+            and results
+        ):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": json.dumps(
+                                    {"query": query}
+                                ),
+                            },
+                        }
+                    ],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": results,
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": h.content,
+                }
+            )
+            continue
         messages.append({"role": h.role, "content": h.content})
 
     messages.append({"role": "user", "content": message})
