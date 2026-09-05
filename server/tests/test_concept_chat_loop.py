@@ -772,3 +772,64 @@ class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
             round2["messages"][-2]["tool_calls"][0]["id"],
             "call_one",
         )
+
+    async def test_bad_request_tools_retries_without_tools(self) -> None:
+        import httpx
+        from openai import BadRequestError
+
+        request = httpx.Request("POST", "https://example.com/v1/chat")
+        response = httpx.Response(400, request=request)
+        reject = BadRequestError(
+            "Model does not support tools",
+            response=response,
+            body=None,
+        )
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                reject,
+                FakeStream(_answer_stream("No tools path.")),
+            ]
+        )
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+        ) as one_shot:
+            events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+                provider="generalcompute",
+                model_slug="anthropic/claude-sonnet-4",
+            )
+        one_shot.assert_not_awaited()
+        self.assertIn({"warning": SEARCH_WARNING}, events)
+        self.assertIn({"delta": "No tools path."}, events)
+        self.assertEqual(events[-1], "[DONE]")
+        self.assertFalse(
+            any(
+                isinstance(item, dict) and "error" in item
+                for item in events
+            )
+        )
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        retry_kwargs = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertNotIn("tools", retry_kwargs)
+        self.assertNotIn("tool_choice", retry_kwargs)
+
+    async def test_message_mentions_tool_choice_retries_once(self) -> None:
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                Exception("unknown field tool_choice"),
+                FakeStream(_answer_stream("ok")),
+            ]
+        )
+        events, client = await _run_chat(
+            client,
+            search_context=_enabled_context(),
+        )
+        self.assertIn({"warning": SEARCH_WARNING}, events)
+        self.assertIn({"delta": "ok"}, events)
+        retry_kwargs = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertNotIn("tools", retry_kwargs)
+        self.assertEqual(client.chat.completions.create.await_count, 2)

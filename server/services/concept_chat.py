@@ -38,7 +38,7 @@ import json
 import logging
 from typing import Any, AsyncGenerator, List, Optional
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from server.database.storage_registry import (
     learning_repository as learning_manager,
@@ -333,6 +333,16 @@ def _parse_web_search_query(arguments: str) -> Optional[str]:
     return query
 
 
+def _is_tools_rejected(exc: BaseException) -> bool:
+    if isinstance(exc, BadRequestError):
+        return True
+    lowered = str(exc).lower()
+    return any(
+        token in lowered
+        for token in ("tools", "tool_choice", "function")
+    )
+
+
 def _assistant_tool_call_message(
     tool_call_id: str,
     query: str,
@@ -446,10 +456,38 @@ async def stream_concept_chat(
 
     content_parts: list[str] = []
     slots: dict[int, dict[str, Any]] = {}
+    create_kwargs = _round_kwargs(messages, tool_choice="auto")
     try:
-        stream = await client.chat.completions.create(
-            **_round_kwargs(messages, tool_choice="auto")
-        )
+        stream = await client.chat.completions.create(**create_kwargs)
+    except Exception as exc:
+        if create_kwargs.get("tools") and _is_tools_rejected(exc):
+            yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
+            fallback = dict(create_kwargs)
+            fallback.pop("tools", None)
+            fallback.pop("tool_choice", None)
+            fallback.pop("parallel_tool_calls", None)
+            try:
+                stream = await client.chat.completions.create(
+                    **fallback
+                )
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            yield _sse({"delta": delta.content})
+            except Exception as retry_exc:
+                logger.error(
+                    "Concept chat stream failed: %s", retry_exc
+                )
+                yield _sse({"error": str(retry_exc)})
+            yield "data: [DONE]\n\n"
+            return
+        logger.error("Concept chat stream failed: %s", exc)
+        yield _sse({"error": str(exc)})
+        yield "data: [DONE]\n\n"
+        return
+
+    try:
         async for chunk in stream:
             if not chunk.choices:
                 continue
@@ -528,10 +566,33 @@ async def stream_concept_chat(
             )
             yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
 
+    round2_kwargs = _round_kwargs(messages, tool_choice="none")
     try:
-        stream2 = await client.chat.completions.create(
-            **_round_kwargs(messages, tool_choice="none")
-        )
+        stream2 = await client.chat.completions.create(**round2_kwargs)
+    except Exception as exc:
+        if round2_kwargs.get("tools") and _is_tools_rejected(exc):
+            yield _sse({"warning": SEARCH_UNAVAILABLE_WARNING})
+            fallback = dict(round2_kwargs)
+            fallback.pop("tools", None)
+            fallback.pop("tool_choice", None)
+            fallback.pop("parallel_tool_calls", None)
+            try:
+                stream2 = await client.chat.completions.create(
+                    **fallback
+                )
+            except Exception as retry_exc:
+                logger.error(
+                    "Concept chat stream failed: %s", retry_exc
+                )
+                yield _sse({"error": str(retry_exc)})
+                yield "data: [DONE]\n\n"
+                return
+        else:
+            logger.error("Concept chat stream failed: %s", exc)
+            yield _sse({"error": str(exc)})
+            yield "data: [DONE]\n\n"
+            return
+    try:
         async for chunk in stream2:
             if chunk.choices and chunk.choices[0].delta:
                 delta = chunk.choices[0].delta
