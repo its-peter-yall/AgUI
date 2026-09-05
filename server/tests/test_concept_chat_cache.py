@@ -47,8 +47,10 @@ class FakeStream:
 def _chunk(text):
     delta = MagicMock()
     delta.content = text
+    delta.tool_calls = None
     choice = MagicMock()
     choice.delta = delta
+    choice.finish_reason = None
     chunk = MagicMock()
     chunk.choices = [choice]
     return chunk

@@ -347,3 +347,48 @@ class ConceptChatHistoryTests(unittest.TestCase):
             [item["role"] for item in messages if item["role"] == "tool"],
             [],
         )
+
+
+class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_context_omits_tools(self) -> None:
+        client = _make_client([FakeStream(_answer_stream("hi"))])
+        events, client = await _run_chat(
+            client,
+            search_context=SearchContext(),
+        )
+        self.assertEqual(
+            events,
+            [{"delta": "hi"}, "[DONE]"],
+        )
+        _args, kwargs = client.chat.completions.create.call_args
+        self.assertNotIn("tools", kwargs)
+        self.assertNotIn("tool_choice", kwargs)
+        self.assertNotIn("parallel_tool_calls", kwargs)
+        self.assertEqual(client.chat.completions.create.await_count, 1)
+
+    async def test_none_context_omits_tools(self) -> None:
+        client = _make_client([FakeStream(_answer_stream("hi"))])
+        events, client = await _run_chat(client)
+        _args, kwargs = client.chat.completions.create.call_args
+        self.assertNotIn("tools", kwargs)
+        self.assertEqual(events[-1], "[DONE]")
+
+    async def test_disabled_still_sends_expanded_history(self) -> None:
+        client = _make_client([FakeStream(_answer_stream("ok"))])
+        history = [
+            ConceptChatMessage(role="user", content="What is BaseTool?"),
+            ConceptChatMessage(
+                role="assistant",
+                content="BaseTool is the interface.",
+                search=_search_payload(),
+            ),
+        ]
+        _events, client = await _run_chat(
+            client,
+            history=history,
+            search_context=SearchContext(),
+        )
+        _args, kwargs = client.chat.completions.create.call_args
+        roles = [item["role"] for item in kwargs["messages"]]
+        self.assertIn("tool", roles)
+        self.assertNotIn("tools", kwargs)

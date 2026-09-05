@@ -12,10 +12,12 @@ ROLE IN PROJECT:
     - Resolves provider base URLs from model slug prefixes
     - Constructs system prompts with concept content and heading context
     - Streams SSE responses via openai.AsyncOpenAI (no Instructor)
+    - Accepts optional SearchContext without changing globe-off chat
 KEY COMPONENTS:
     - resolve_chat_base_url(): Maps model slug to OpenAI-compatible base URL
     - build_concept_chat_messages(): Constructs prompt with context
-    - stream_concept_chat(): Async generator yielding SSE frames
+    - stream_concept_chat(): Async generator yielding SSE frames;
+      accepts optional SearchContext
 DEPENDENCIES:
     - External: openai
     - Internal: server.schemas.learning, server.database.learning_persistence
@@ -40,6 +42,7 @@ from server.database.storage_registry import (
     learning_repository as learning_manager,
 )
 from server.schemas.learning import ConceptChatMessage
+from server.schemas.search import SearchContext
 from server.utils.prompt_cache import apply_openrouter_cache_control
 
 logger = logging.getLogger(__name__)
@@ -245,11 +248,13 @@ async def stream_concept_chat(
     provider: str = "openrouter",
     thinking_enabled: bool = False,
     thinking_effort: Optional[str] = None,
+    search_context: Optional[SearchContext] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream chat completions as SSE frames.
 
     Constructs messages with context, calls AsyncOpenAI with stream=True,
     and yields SSE-formatted delta chunks terminated by [DONE].
+    Disabled or missing search_context keeps today's create() path.
 
     Args:
         api_key: Provider API key.
@@ -262,6 +267,8 @@ async def stream_concept_chat(
         provider: AI provider identifier ('openrouter' or 'generalcompute').
         thinking_enabled: OpenRouter reasoning mode on/off.
         thinking_effort: Effort level when thinking is enabled.
+        search_context: Optional globe search context. None or disabled
+            keeps today's kwargs (no tools).
 
     Yields:
         SSE frame strings: 'data: {"delta":"...", ...}\\n\\n' per chunk,
