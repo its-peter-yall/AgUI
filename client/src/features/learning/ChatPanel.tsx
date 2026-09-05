@@ -61,6 +61,15 @@ interface ChatPanelProps {
 	onPrefillConsumed?: () => void;
 }
 
+function isSafeHttpUrl(url: string): boolean {
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === "http:" || parsed.protocol === "https:";
+	} catch {
+		return false;
+	}
+}
+
 const TypingIndicator = () => (
 	<div className="flex items-center gap-1.5 py-2 px-1" aria-label="Thinking">
 		<span className="h-1.5 w-1.5 bg-(--cyber-yellow) rounded-full animate-bounce" style={{ animationDelay: "0ms", animationDuration: "0.8s" }} />
@@ -383,6 +392,35 @@ export function ChatPanel({
 										</div>
 									) : (
 										<TypingIndicator />
+									)}
+									{msg.search && msg.search.sources.length > 0 && (
+										<div
+											className="mt-2 flex flex-wrap gap-1.5"
+											aria-label="Web search sources"
+										>
+											{msg.search.sources
+												.filter(
+													(source) =>
+														Boolean(source.title) &&
+														isSafeHttpUrl(source.url),
+												)
+												.map((source, sourceIndex) => (
+													<a
+														key={`${source.url}-${sourceIndex}`}
+														href={source.url}
+														target="_blank"
+														rel="noreferrer noopener"
+														className={cn(
+															"inline-flex max-w-full items-center truncate rounded-full",
+															"border border-border bg-muted px-2 py-0.5 text-xs",
+															"text-muted-foreground hover:text-foreground",
+															"focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+														)}
+													>
+														{source.title}
+													</a>
+												))}
+										</div>
 									)}
 								</div>
 							)}

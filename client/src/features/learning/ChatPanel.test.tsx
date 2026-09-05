@@ -188,4 +188,87 @@ describe("ChatPanel web search", () => {
 			"The current API uses widgets.",
 		);
 	});
+
+	it("renders source chips from search.sources and never shows search.results as chat text", () => {
+		mocks.hook.messages = [
+			{ role: "user", content: "What is the current API?" },
+			{
+				role: "assistant",
+				content: "The current API uses widgets.",
+				search: {
+					query: "widgets current API",
+					tool_call_id: "call_1",
+					results:
+						"WEB SEARCH RESULTS for: \"widgets current API\"\nUNIQUE_SEARCH_BLOB_NOT_FOR_UI",
+					sources: [
+						{
+							title: "Widgets docs",
+							url: "https://example.com/widgets",
+						},
+						{
+							title: "API changelog",
+							url: "https://example.com/changelog",
+						},
+					],
+				},
+			},
+		];
+		renderPanel();
+		const docs = screen.getByRole("link", { name: "Widgets docs" });
+		expect(docs).toHaveAttribute("href", "https://example.com/widgets");
+		expect(docs).toHaveAttribute("target", "_blank");
+		expect(docs).toHaveAttribute("rel", "noreferrer noopener");
+		expect(
+			screen.getByRole("link", { name: "API changelog" }),
+		).toHaveAttribute("href", "https://example.com/changelog");
+		expect(screen.getByTestId("markdown")).toHaveTextContent(
+			"The current API uses widgets.",
+		);
+		expect(screen.getByTestId("markdown")).not.toHaveTextContent(
+			"UNIQUE_SEARCH_BLOB_NOT_FOR_UI",
+		);
+		expect(
+			screen.queryByText(/UNIQUE_SEARCH_BLOB_NOT_FOR_UI/),
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByText(/WEB SEARCH RESULTS/),
+		).not.toBeInTheDocument();
+	});
+
+	it("does not render unsafe or empty source chips", () => {
+		mocks.hook.messages = [
+			{
+				role: "assistant",
+				content: "Answer from the concept.",
+				search: {
+					query: "q",
+					tool_call_id: "call_2",
+					results: "UNIQUE_SEARCH_BLOB_NOT_FOR_UI",
+					sources: [
+						{
+							title: "Evil",
+							url: "javascript:alert(1)",
+						},
+						{
+							title: "",
+							url: "https://example.com/ok",
+						},
+						{
+							title: "Safe source",
+							url: "https://example.com/safe",
+						},
+					],
+				},
+			},
+		];
+		renderPanel();
+		expect(screen.getByRole("link", { name: "Safe source" })).toHaveAttribute(
+			"href",
+			"https://example.com/safe",
+		);
+		expect(screen.queryByRole("link", { name: "Evil" })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole("link", { name: "" }),
+		).not.toBeInTheDocument();
+	});
 });
