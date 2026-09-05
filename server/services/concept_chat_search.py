@@ -32,6 +32,13 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional
 
+import httpx
+
+from server.schemas.search import SearchContext
+from server.search.adapters import build_search_adapters
+from server.search.coordinator import ProviderCoordinator
+from server.search.types import SearchQuery, SearchResponse
+
 WEB_SEARCH_TOOL = {
     "type": "function",
     "function": {
@@ -108,3 +115,60 @@ class ChatSearchLedger:
         if self._search_calls + amount > self.max_search_calls:
             raise RuntimeError("Chat search call budget exceeded")
         self._search_calls += amount
+
+
+async def one_shot_chat_search(
+    search_context: SearchContext,
+    query: str,
+    *,
+    max_results: int = 5,
+    timeout_seconds: float = 20.0,
+) -> SearchResponse:
+    """Run one ProviderCoordinator search for concept chat.
+
+    Args:
+        search_context: Runtime context with selected provider keys.
+        query: Model query; truncated to SearchQuery max (500 chars).
+        max_results: Server-chosen hit cap (default 5). Not a tool arg.
+        timeout_seconds: Coordinator timeout (default 20).
+
+    Returns:
+        SearchResponse from the first successful provider.
+
+    Raises:
+        ValueError: Empty adapter set or mismatched credentials.
+        SearchError: Non-rotatable provider failure.
+        AllProvidersUnavailable: Every configured provider failed.
+    """
+    client = httpx.AsyncClient()
+    try:
+        all_adapters = build_search_adapters(client)
+        selected = set(search_context.provider_ids)
+        adapters = {
+            provider_id: adapter
+            for provider_id, adapter in all_adapters.items()
+            if provider_id in selected
+        }
+        credentials = {
+            provider_id: search_context.get_api_key(provider_id)
+            for provider_id in adapters
+        }
+        ledger = ChatSearchLedger(
+            max_search_calls=2 * len(adapters),
+        )
+        coordinator = ProviderCoordinator.create(
+            adapters=adapters,
+            credentials=credentials,
+            persisted_order=[],
+            ledger=ledger,
+        )
+        search_query = SearchQuery(
+            query=query[:500],
+            max_results=max_results,
+        )
+        return await coordinator.search(
+            search_query,
+            timeout_seconds=timeout_seconds,
+        )
+    finally:
+        await client.aclose()
