@@ -29,6 +29,9 @@ USAGE:
 
 from __future__ import annotations
 
+import time
+from typing import Callable, Optional
+
 WEB_SEARCH_TOOL = {
     "type": "function",
     "function": {
@@ -59,3 +62,49 @@ WEB_SEARCH_TOOL = {
         },
     },
 }
+
+
+class ChatSearchLedger:
+    """In-process search call/time cap for one concept-chat tool round.
+
+    Duck-typed for ProviderCoordinator. Not a ResearchBudgetLedger.
+    """
+
+    def __init__(
+        self,
+        max_search_calls: int,
+        *,
+        max_elapsed_seconds: float = 25.0,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
+        """Store call cap and start the monotonic window.
+
+        Args:
+            max_search_calls: Hard cap (use 2 * provider count).
+            max_elapsed_seconds: Wall window; default 25 so remaining
+                is never 0 at start (coordinator clamps 0 to 10ms).
+            clock: Optional monotonic clock for tests.
+        """
+        self.max_search_calls = max_search_calls
+        self.max_elapsed_seconds = max_elapsed_seconds
+        self._clock = clock or time.monotonic
+        self._started_at = self._clock()
+        self._search_calls = 0
+
+    def remaining_seconds(self) -> float:
+        """Seconds left in the 25s window, floored at 0."""
+        elapsed = self._clock() - self._started_at
+        return max(0.0, self.max_elapsed_seconds - elapsed)
+
+    def reserve_search_call(self, amount: int = 1) -> None:
+        """Reserve search attempts or raise RuntimeError.
+
+        Args:
+            amount: Calls to reserve (coordinator uses default 1).
+
+        Raises:
+            RuntimeError: When the call cap would be exceeded.
+        """
+        if self._search_calls + amount > self.max_search_calls:
+            raise RuntimeError("Chat search call budget exceeded")
+        self._search_calls += amount

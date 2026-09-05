@@ -29,7 +29,11 @@ from __future__ import annotations
 import json
 import unittest
 
-from server.services.concept_chat_search import WEB_SEARCH_TOOL
+from server.search.budget import ResearchBudgetExceeded, ResearchBudgetLedger
+from server.services.concept_chat_search import (
+    WEB_SEARCH_TOOL,
+    ChatSearchLedger,
+)
 
 
 class WebSearchToolSchemaTests(unittest.TestCase):
@@ -61,3 +65,52 @@ class WebSearchToolSchemaTests(unittest.TestCase):
         self.assertIn("concept-title", lowered)
         self.assertIn("disambiguation", lowered)
         self.assertNotIn("max_results", lowered)
+
+
+class ChatSearchLedgerTests(unittest.TestCase):
+    """Duck-typed chat ledger: not ResearchBudgetLedger."""
+
+    def test_is_not_research_budget_ledger(self) -> None:
+        self.assertFalse(
+            issubclass(ChatSearchLedger, ResearchBudgetLedger)
+        )
+        ledger = ChatSearchLedger(max_search_calls=2)
+        self.assertIsInstance(ledger, ChatSearchLedger)
+        self.assertNotIsInstance(ledger, ResearchBudgetLedger)
+
+    def test_remaining_seconds_never_zero_at_start(self) -> None:
+        ledger = ChatSearchLedger(max_search_calls=2)
+        remaining = ledger.remaining_seconds()
+        self.assertGreater(remaining, 24.0)
+        self.assertLessEqual(remaining, 25.0)
+        self.assertEqual(ledger.max_search_calls, 2)
+        self.assertEqual(ledger.max_elapsed_seconds, 25.0)
+
+    def test_remaining_seconds_uses_25s_monotonic_window(self) -> None:
+        class FakeClock:
+            def __init__(self) -> None:
+                self.now = 1000.0
+
+            def __call__(self) -> float:
+                return self.now
+
+        clock = FakeClock()
+        ledger = ChatSearchLedger(max_search_calls=4, clock=clock)
+        self.assertEqual(ledger.remaining_seconds(), 25.0)
+        clock.now = 1010.0
+        self.assertEqual(ledger.remaining_seconds(), 15.0)
+        clock.now = 1025.0
+        self.assertEqual(ledger.remaining_seconds(), 0.0)
+        clock.now = 1040.0
+        self.assertEqual(ledger.remaining_seconds(), 0.0)
+
+    def test_reserve_search_call_hard_stops_after_cap(self) -> None:
+        ledger = ChatSearchLedger(max_search_calls=2)
+        ledger.reserve_search_call()
+        ledger.reserve_search_call(1)
+        with self.assertRaises(RuntimeError) as raised:
+            ledger.reserve_search_call()
+        self.assertNotIsInstance(
+            raised.exception,
+            ResearchBudgetExceeded,
+        )
