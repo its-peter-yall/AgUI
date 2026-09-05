@@ -196,4 +196,82 @@ describe('streamConceptChat', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('invokes onStatus, onSearch, and onWarning without throwing', async () => {
+    const onDelta = vi.fn();
+    const onStatus = vi.fn();
+    const onSearch = vi.fn();
+    const onWarning = vi.fn();
+
+    mockOkBody(
+      [
+        'data: {"status":"searching"}',
+        `data: ${JSON.stringify({ search: sampleSearch })}`,
+        `data: ${JSON.stringify({ warning: SEARCH_UNAVAILABLE_WARNING })}`,
+        'data: {"delta":"From concept."}',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+    );
+
+    await expect(
+      streamConceptChat({
+        ...baseParams(),
+        onDelta,
+        onStatus,
+        onSearch,
+        onWarning,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(onStatus).toHaveBeenCalledWith('searching');
+    expect(onSearch).toHaveBeenCalledWith(sampleSearch);
+    expect(onWarning).toHaveBeenCalledWith(SEARCH_UNAVAILABLE_WARNING);
+    expect(onDelta).toHaveBeenCalledWith('From concept.');
+  });
+
+  it('still throws on parsed error events', async () => {
+    const onDelta = vi.fn();
+    const onWarning = vi.fn();
+
+    mockOkBody(
+      ['data: {"error":"model failed"}', 'data: [DONE]', ''].join('\n'),
+    );
+
+    await expect(
+      streamConceptChat({
+        ...baseParams(),
+        onDelta,
+        onWarning,
+      }),
+    ).rejects.toThrow('model failed');
+
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it('ignores unknown SSE keys', async () => {
+    const onDelta = vi.fn();
+    const onStatus = vi.fn();
+
+    mockOkBody(
+      [
+        'data: {"foo":"bar"}',
+        'data: {"delta":"ok"}',
+        'data: [DONE]',
+        '',
+      ].join('\n'),
+    );
+
+    await expect(
+      streamConceptChat({
+        ...baseParams(),
+        onDelta,
+        onStatus,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(onDelta).toHaveBeenCalledWith('ok');
+    expect(onStatus).not.toHaveBeenCalled();
+  });
 });

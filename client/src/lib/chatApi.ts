@@ -40,7 +40,10 @@
 
 import { getProviderSettings } from "./providerSettings";
 import { buildProviderHeaders } from "./providerApi";
-import type { ConceptChatMessage } from "@/types/learning";
+import type {
+	ConceptChatMessage,
+	ConceptChatStreamChunk,
+} from "@/types/learning";
 import {
 	buildWebSearchHeaders,
 	WebSearchConfigurationError,
@@ -79,6 +82,9 @@ export async function streamConceptChat({
 	selectedHeadingIds,
 	onDelta,
 	webSearchEnabled = false,
+	onStatus,
+	onSearch,
+	onWarning,
 	signal,
 }: StreamConceptChatParams): Promise<void> {
 	const settings = getProviderSettings();
@@ -168,15 +174,21 @@ export async function streamConceptChat({
 				if (payload === "[DONE]") return;
 
 				try {
-					const parsed = JSON.parse(payload) as {
-						delta?: string;
-						error?: string;
-					};
+					const parsed = JSON.parse(payload) as ConceptChatStreamChunk;
 					if (parsed.error) {
 						throw new Error(parsed.error);
 					}
 					if (parsed.delta) {
 						onDelta(parsed.delta);
+					}
+					if (parsed.status) {
+						onStatus?.(parsed.status);
+					}
+					if (parsed.search) {
+						onSearch?.(parsed.search);
+					}
+					if (parsed.warning) {
+						onWarning?.(parsed.warning);
 					}
 				} catch (e) {
 					// Re-throw streaming errors, skip malformed JSON
