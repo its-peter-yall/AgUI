@@ -431,3 +431,142 @@ class ConceptChatToolLoopTests(unittest.IsolatedAsyncioTestCase):
             {"reasoning": {"effort": "medium"}},
         )
         self.assertEqual(kwargs["tools"], [WEB_SEARCH_TOOL])
+
+    async def test_success_tool_loop_formats_and_round_trips(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(
+                    [
+                        _content_chunk("partial-should-not-emit"),
+                        *_web_search_stream("LangChain BaseTool"),
+                    ]
+                ),
+                FakeStream(_answer_stream("Grounded answer.")),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [MagicMock(name="hit")]
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+            return_value=search_response,
+        ) as one_shot, patch(
+            "server.services.concept_chat.format_chat_search_results",
+            return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
+        ) as formatter:
+            events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        self.assertEqual(
+            events,
+            [
+                {"status": "searching"},
+                {
+                    "search": {
+                        "query": "LangChain BaseTool",
+                        "tool_call_id": "call_abc123",
+                        "results": FORMATTED_BLOB,
+                        "sources": FORMATTED_SOURCES,
+                    }
+                },
+                {"delta": "Grounded answer."},
+                "[DONE]",
+            ],
+        )
+        dumped = json.dumps(events)
+        self.assertNotIn("partial-should-not-emit", dumped)
+        self.assertNotIn("tvly-test", dumped)
+        one_shot.assert_awaited_once()
+        self.assertEqual(
+            one_shot.await_args.args[1],
+            "LangChain BaseTool",
+        )
+        formatter.assert_called_once_with(
+            "LangChain BaseTool",
+            search_response.results,
+        )
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        round1 = client.chat.completions.create.call_args_list[0].kwargs
+        round2 = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(round1["tools"], [WEB_SEARCH_TOOL])
+        self.assertEqual(round1["tool_choice"], "auto")
+        self.assertFalse(round1["parallel_tool_calls"])
+        self.assertEqual(round2["tools"], [WEB_SEARCH_TOOL])
+        self.assertEqual(round2["tool_choice"], "none")
+        self.assertTrue(
+            round2.get("parallel_tool_calls") in (None, False)
+        )
+        roles = [item["role"] for item in round2["messages"]]
+        self.assertEqual(roles[-2], "assistant")
+        self.assertEqual(roles[-1], "tool")
+        self.assertIsNone(round2["messages"][-2]["content"])
+        self.assertEqual(
+            round2["messages"][-2]["tool_calls"][0]["id"],
+            "call_abc123",
+        )
+        self.assertEqual(
+            round2["messages"][-1]["content"],
+            FORMATTED_BLOB,
+        )
+        self.assertEqual(
+            round2["messages"][-1]["tool_call_id"],
+            "call_abc123",
+        )
+
+    async def test_does_not_treat_argument_chunks_as_new_calls(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(_web_search_stream("LangChain BaseTool")),
+                FakeStream(_answer_stream("ok")),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+            return_value=search_response,
+        ) as one_shot, patch(
+            "server.services.concept_chat.format_chat_search_results",
+            return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
+        ):
+            events, _client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+            )
+        one_shot.assert_awaited_once()
+        statuses = [
+            item.get("status")
+            for item in events
+            if isinstance(item, dict)
+        ]
+        self.assertEqual(statuses.count("searching"), 1)
+
+    async def test_thinking_extra_body_on_both_tool_rounds(self) -> None:
+        client = _make_client(
+            [
+                FakeStream(_web_search_stream("LangChain BaseTool")),
+                FakeStream(_answer_stream("ok")),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        with patch(
+            "server.services.concept_chat.one_shot_chat_search",
+            new_callable=AsyncMock,
+            return_value=search_response,
+        ), patch(
+            "server.services.concept_chat.format_chat_search_results",
+            return_value=(FORMATTED_BLOB, FORMATTED_SOURCES),
+        ):
+            _events, client = await _run_chat(
+                client,
+                search_context=_enabled_context(),
+                thinking_enabled=True,
+                thinking_effort="medium",
+            )
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        expected = {"reasoning": {"effort": "medium"}}
+        for call in client.chat.completions.create.call_args_list:
+            self.assertEqual(call.kwargs.get("extra_body"), expected)
