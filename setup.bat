@@ -73,18 +73,17 @@ REM --- Frontend setup ---
 echo [2/2] Setting up frontend (Node)...
 echo.
 
-if not exist "client\node_modules" (
-    echo Installing Node packages...
-    cd client && npm install && cd ..
-    if !errorlevel! neq 0 (
-        echo ERROR: Failed to install Node packages.
-        pause
-        exit /b 1
-    )
-    echo   [OK] Node packages installed
-) else (
-    echo   [OK] Node packages already installed
+echo Installing Node packages...
+pushd client
+call npm install
+set INSTALL_ERR=!errorlevel!
+popd
+if !INSTALL_ERR! neq 0 (
+    echo ERROR: Failed to install Node packages.
+    pause
+    exit /b 1
 )
+echo   [OK] Node packages installed
 
 echo.
 echo ========================================

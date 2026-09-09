@@ -1254,11 +1254,60 @@ def convert_legacy_to_quiz_set(legacy_quiz: dict) -> QuizSet:
 # =============================================================================
 
 
+class ConceptChatSearchSource(BaseModel):
+    """Title and URL for a source chip on an assistant message."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str = Field(
+        ...,
+        description="Source title shown on UI chips",
+        min_length=1,
+    )
+    url: str = Field(
+        ...,
+        description="Source URL shown on UI chips",
+        min_length=1,
+    )
+
+
+class ConceptChatSearch(BaseModel):
+    """Persisted web-search blob on an assistant chat message.
+
+    extra stays default ignore so unknown nested keys drop. Do not
+    set extra='forbid' — old clients and stored blobs must still parse.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    query: str = Field(
+        ...,
+        description="Query executed for this search",
+        min_length=1,
+    )
+    tool_call_id: str = Field(
+        ...,
+        description="Tool call id used to rebuild history",
+        min_length=1,
+    )
+    results: str = Field(
+        ...,
+        description="Formatted readable search results text",
+        min_length=1,
+    )
+    sources: List[ConceptChatSearchSource] = Field(
+        ...,
+        description="UI source chips (title and url only)",
+    )
+
+
 class ConceptChatMessage(BaseModel):
     """A single chat message in concept chat history.
 
     Represents one turn in the ephemeral conversation between user and
-    assistant. Role is constrained to 'user' or 'assistant'.
+    assistant. Role is constrained to 'user' or 'assistant'. Optional
+    search blob rides on assistant messages for later-turn rebuild.
+    extra stays default ignore. Do not set extra='forbid'.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -1271,6 +1320,10 @@ class ConceptChatMessage(BaseModel):
         ...,
         description="Message content text",
         min_length=1,
+    )
+    search: Optional[ConceptChatSearch] = Field(
+        default=None,
+        description="Optional web-search blob for later turns",
     )
 
 

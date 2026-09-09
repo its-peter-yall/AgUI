@@ -347,9 +347,22 @@ export interface RevisionListResponse {
 
 export type ConceptChatRole = "user" | "assistant";
 
+export interface ConceptChatSearchSource {
+	title: string;
+	url: string;
+}
+
+export interface ConceptChatSearch {
+	query: string;
+	tool_call_id: string;
+	results: string;
+	sources: ConceptChatSearchSource[];
+}
+
 export interface ConceptChatMessage {
 	role: ConceptChatRole;
 	content: string;
+	search?: ConceptChatSearch;
 }
 
 export interface ConceptChatRequest {
@@ -361,4 +374,7 @@ export interface ConceptChatRequest {
 export interface ConceptChatStreamChunk {
 	delta?: string;
 	error?: string;
+	status?: "searching";
+	search?: ConceptChatSearch;
+	warning?: string;
 }

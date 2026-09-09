@@ -6,18 +6,20 @@
  *
  * PURPOSE:
  *    React hook managing ephemeral concept chat state: messages, streaming
- *    status, errors, and conversation actions. Consumes streamConceptChat
- *    from chatApi.ts and maintains client-side history capped at 10 messages.
+ *    status, errors, per-node globe persist, and conversation actions.
+ *    Consumes streamConceptChat from chatApi.ts and maintains client-side
+ *    history capped at 10 messages.
  *
  * ROLE IN PROJECT:
  *    State management layer between ChatPanel UI and the SSE chat API.
- *    Provides sendMessage, resetChat, and stopStreaming to the component
- *    tree without exposing streaming internals.
+ *    Provides sendMessage, resetChat, stopStreaming, and webSearchEnabled
+ *    to the component tree without exposing streaming internals.
  *
  * KEY COMPONENTS:
  *    - useConceptChat(): Named export hook returning chat state and actions
  *    - getStorageKey(): Per-node localStorage key builder
  *    - cleanupExpiredChats(): Removes stale chat entries on mount
+ *    - webSearchEnabled: Per-node globe persisted on the same StoredChat blob
  *
  * DEPENDENCIES:
  *    - External: react
@@ -43,6 +45,7 @@ const STORAGE_PREFIX = "concept_chat_";
 interface StoredChat {
 	messages: ConceptChatMessage[];
 	lastPromptTimestamp: number;
+	webSearchEnabled?: boolean;
 }
 
 /**
@@ -151,8 +154,10 @@ export function useConceptChat(
 		}
 	}, []);
 
-	const loadStoredChat = useCallback((): ConceptChatMessage[] => {
-		// Course complete → clear this node's chat
+	const loadStoredChat = useCallback((): {
+		messages: ConceptChatMessage[];
+		webSearchEnabled: boolean;
+	} => {
 		if (isCourseComplete) {
 			try {
 				if (sessionId && nodeId) {
@@ -161,44 +166,74 @@ export function useConceptChat(
 			} catch (e) {
 				console.error("Failed to clear chat on course completion:", e);
 			}
-			return [];
+			return { messages: [], webSearchEnabled: false };
 		}
 
-		// IDs not yet resolved — return empty without clearing
 		if (!sessionId || !nodeId) {
-			return [];
+			return { messages: [], webSearchEnabled: false };
 		}
 
 		try {
 			const key = getStorageKey(sessionId, nodeId);
 			const storedRaw = localStorage.getItem(key);
-			if (!storedRaw) return [];
+			if (!storedRaw) {
+				return { messages: [], webSearchEnabled: false };
+			}
 			const stored: StoredChat = JSON.parse(storedRaw);
 
-			// Validate 1-hour expiration
 			if (Date.now() - stored.lastPromptTimestamp > ONE_HOUR) {
 				localStorage.removeItem(key);
-				return [];
+				return { messages: [], webSearchEnabled: false };
 			}
 
-			return stored.messages;
+			return {
+				messages: stored.messages,
+				webSearchEnabled: stored.webSearchEnabled === true,
+			};
 		} catch (err) {
 			console.error("Failed to parse stored concept chat:", err);
-			return [];
+			return { messages: [], webSearchEnabled: false };
 		}
 	}, [sessionId, nodeId, isCourseComplete]);
 
-	const [messages, setMessages] = useState<ConceptChatMessage[]>(() =>
-		loadStoredChat(),
+	const initialChat = loadStoredChat();
+	const [messages, setMessages] = useState<ConceptChatMessage[]>(
+		() => initialChat.messages,
 	);
+	const [webSearchEnabled, setWebSearchEnabledState] = useState(
+		() => initialChat.webSearchEnabled,
+	);
+	const [streamingStatus, setStreamingStatus] = useState<string | null>(
+		null,
+	);
+	const [streamingWarning, setStreamingWarning] = useState<string | null>(
+		null,
+	);
+	const [streamingSearch, setStreamingSearch] = useState<
+		NonNullable<ConceptChatMessage["search"]> | null
+	>(null);
 	const [isStreaming, setIsStreaming] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const { startStreaming, stopStreaming: stopStreamingCtx } = useChatStreaming();
 
+	const webSearchEnabledRef = useRef(webSearchEnabled);
+	const messagesRef = useRef(messages);
+	useEffect(() => {
+		webSearchEnabledRef.current = webSearchEnabled;
+	}, [webSearchEnabled]);
+	useEffect(() => {
+		messagesRef.current = messages;
+	}, [messages]);
+
 	// Sync state when topic, session, or completion state changes
 	useEffect(() => {
 		const loaded = loadStoredChat();
-		setMessages(loaded);
+		setMessages(loaded.messages);
+		setWebSearchEnabledState(loaded.webSearchEnabled);
+		webSearchEnabledRef.current = loaded.webSearchEnabled;
+		setStreamingStatus(null);
+		setStreamingWarning(null);
+		setStreamingSearch(null);
 		setError(null);
 		setIsStreaming(false);
 		stopStreamingCtx();
@@ -218,6 +253,7 @@ export function useConceptChat(
 				const data: StoredChat = {
 					messages: msgs,
 					lastPromptTimestamp: timestamp,
+					webSearchEnabled: webSearchEnabledRef.current,
 				};
 				localStorage.setItem(
 					getStorageKey(sid, nid),
@@ -230,6 +266,31 @@ export function useConceptChat(
 		[],
 	);
 
+	const setWebSearchEnabled = useCallback(
+		(enabled: boolean) => {
+			webSearchEnabledRef.current = enabled;
+			setWebSearchEnabledState(enabled);
+			try {
+				const sid = sessionIdRef.current;
+				const nid = nodeIdRef.current;
+				if (!sid || !nid) return;
+				const key = getStorageKey(sid, nid);
+				let timestamp = Date.now();
+				const raw = localStorage.getItem(key);
+				if (raw) {
+					const stored: StoredChat = JSON.parse(raw);
+					if (typeof stored.lastPromptTimestamp === "number") {
+						timestamp = stored.lastPromptTimestamp;
+					}
+				}
+				saveToStorage(messagesRef.current, timestamp);
+			} catch (e) {
+				console.error("Failed to persist webSearchEnabled:", e);
+			}
+		},
+		[saveToStorage],
+	);
+
 	const clearChat = useCallback(() => {
 		if (abortRef.current) {
 			abortRef.current.abort();
@@ -239,6 +300,11 @@ export function useConceptChat(
 		setIsStreaming(false);
 		stopStreamingCtx();
 		setError(null);
+		setWebSearchEnabledState(false);
+		webSearchEnabledRef.current = false;
+		setStreamingStatus(null);
+		setStreamingWarning(null);
+		setStreamingSearch(null);
 		try {
 			const sid = sessionIdRef.current;
 			const nid = nodeIdRef.current;
@@ -291,22 +357,22 @@ export function useConceptChat(
 				content: trimmed,
 			};
 
-			// Use functional updater to avoid stale messages closure
+			// Use messagesRef so history is ready before streamConceptChat.
 			let historyForRequest: ConceptChatMessage[] = [];
 			const timestamp = Date.now();
 
-			setMessages((prev) => {
-				const updatedWithUser = [...prev, userMessage];
-				historyForRequest = updatedWithUser.slice(
-					-MAX_HISTORY_MESSAGES,
-				);
-				saveToStorage(updatedWithUser, timestamp);
-				return updatedWithUser;
-			});
+			const updatedWithUser = [...messagesRef.current, userMessage];
+			historyForRequest = updatedWithUser.slice(-MAX_HISTORY_MESSAGES);
+			messagesRef.current = updatedWithUser;
+			saveToStorage(updatedWithUser, timestamp);
+			setMessages(updatedWithUser);
 
 			setIsStreaming(true);
 			startStreaming();
 			setError(null);
+			setStreamingStatus(null);
+			setStreamingWarning(null);
+			setStreamingSearch(null);
 
 			// Prepare assistant placeholder
 			const assistantMessage: ConceptChatMessage = {
@@ -327,8 +393,30 @@ export function useConceptChat(
 					sessionId: currentSessionId,
 					nodeId: currentNodeId,
 					message: trimmed,
-					history: historyForRequest.slice(0, -1), // exclude current user msg
+					history: historyForRequest.slice(0, -1),
 					selectedHeadingIds,
+					webSearchEnabled: webSearchEnabledRef.current,
+					onStatus: (status) => {
+						setStreamingStatus(status);
+					},
+					onSearch: (search) => {
+						setStreamingSearch(search);
+						setMessages((prev) => {
+							const updated = [...prev];
+							const last = updated[updated.length - 1];
+							if (last && last.role === "assistant") {
+								updated[updated.length - 1] = {
+									...last,
+									search,
+								};
+							}
+							saveToStorage(updated, timestamp);
+							return updated;
+						});
+					},
+					onWarning: (warning) => {
+						setStreamingWarning(warning);
+					},
 					onDelta: (delta) => {
 						setMessages((prev) => {
 							const updated = [...prev];
@@ -386,5 +474,10 @@ export function useConceptChat(
 		resetChat: clearChat,
 		clearChat,
 		stopStreaming,
+		webSearchEnabled,
+		setWebSearchEnabled,
+		streamingStatus,
+		streamingWarning,
+		streamingSearch,
 	};
 }

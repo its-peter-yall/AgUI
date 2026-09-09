@@ -1534,6 +1534,7 @@ async def concept_chat(
     x_thinking_effort: Optional[str] = Header(
         None, alias="X-Thinking-Effort"
     ),
+    search_context: SearchContext = Depends(get_search_context),
 ) -> StreamingResponse:
     """Stream a context-aware chat response for a concept node."""
     logger.info(
@@ -1611,6 +1612,7 @@ async def concept_chat(
             provider=(x_ai_provider or "openrouter").strip(),
             thinking_enabled=thinking_on,
             thinking_effort=thinking_effort,
+            search_context=search_context,
         ),
         media_type="text/event-stream",
     )

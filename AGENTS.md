@@ -8,13 +8,13 @@ Orients agentic coding assistants. Follow commands, style rules below; match loc
 
 | Document | Purpose |
 |----------|---------|
-| `.planning/codebase/ARCHITECTURE.md` | Vision, purpose, target audience, core capabilities, technical architecture |
-| `.planning/codebase/STACK.md` | Technology choices: React 19, FastAPI, OpenRouter, SQLite, Tailwind 4.x |
-| `.planning/codebase/TESTING.md` | TDD workflow, quality gates, testing patterns, definition of done |
-| `.planning/codebase/CONVENTIONS.md` | Coding conventions for TypeScript, Python, and HTML/CSS |
-| `.planning/codebase/STRUCTURE.md` | Directory layout and where to add new code |
-| `.planning/codebase/INTEGRATIONS.md` | External service integrations and configuration |
-| `.planning/codebase/CONCERNS.md` | Known tech debt, security considerations, performance bottlenecks |
+| `docs/ARCHITECTURE.md` | Vision, purpose, target audience, core capabilities, technical architecture |
+| `docs/STACK.md` | Technology choices: React 19, FastAPI, OpenRouter, SQLite, Tailwind 4.x |
+| `docs/TESTING.md` | TDD workflow, quality gates, testing patterns, definition of done |
+| `docs/CONVENTIONS.md` | Coding conventions for TypeScript, Python, and HTML/CSS |
+| `docs/STRUCTURE.md` | Directory layout and where to add new code |
+| `docs/INTEGRATIONS.md` | External service integrations and configuration |
+| `docs/CONCERNS.md` | Known tech debt, security considerations, performance bottlenecks |
 
 **Rule**: Read relevant spec documents before implementing any feature.
 
@@ -38,7 +38,7 @@ Orients agentic coding assistants. Follow commands, style rules below; match loc
   - `tests/`: Python unit tests
   - `utils/`: Instructor client wrapper
 - `conductor/`: Product guidelines and UI/UX standards
-- `.planning/codebase/`: Comprehensive codebase documentation
+- `docs/`: Codebase map (`ARCHITECTURE.md`, `STACK.md`, `STRUCTURE.md`, `CONVENTIONS.md`, `TESTING.md`, `INTEGRATIONS.md`, `CONCERNS.md`) plus feature plans
 
 ## Technology Versions
 
@@ -109,7 +109,7 @@ Uses `react-router-dom` with routes:
 
 ## Quick Reference: Code Style
 
-### TypeScript/React (per `.planning/codebase/CONVENTIONS.md`)
+### TypeScript/React (per `docs/CONVENTIONS.md`)
 - Use `const` by default; never `var`
 - **No default exports** (mandatory - use named exports only)
 - Single quotes; explicit semicolons
@@ -120,7 +120,7 @@ Uses `react-router-dom` with routes:
 - Hooks start with `use`
 - Type-only imports: `import type { Foo } from ...`
 
-### Python/FastAPI (per `.planning/codebase/CONVENTIONS.md`)
+### Python/FastAPI (per `docs/CONVENTIONS.md`)
 - 4-space indentation, **80-character line limit**
 - Import grouping: stdlib → third-party → local (`server.*`)
 - `snake_case` functions/vars, `PascalCase` classes
@@ -131,7 +131,7 @@ Uses `react-router-dom` with routes:
 - Pydantic: `Field` constraints, `ConfigDict(from_attributes=True)`
 - **main() function pattern** for executable Python files
 
-### HTML/CSS (per `.planning/codebase/CONVENTIONS.md`)
+### HTML/CSS (per `docs/CONVENTIONS.md`)
 - 2-space indentation; no tabs
 - Lowercase: elements, attributes, selectors, properties
 - Class selectors preferred; avoid ID selectors for styling
@@ -174,7 +174,7 @@ from server.database.persistence import session_manager
   - File naming: `test_*.py`
   - Located in `server/tests/` directory
 - Keep tests small, deterministic; mock external dependencies
-- Target: >80% code coverage per `.planning/codebase/TESTING.md`
+- Target: >80% code coverage per `docs/TESTING.md`
 
 ## Conventions to Preserve
 - API routes in `server/routers`; schemas in `server/schemas`
@@ -252,13 +252,13 @@ from server.database.persistence import session_manager
 
 ## AGENT BEHAVIOUR (Spec-Driven)
 
-### Research-First Principle (per `.planning/codebase/CONVENTIONS.md`)
+### Research-First Principle (per `docs/CONVENTIONS.md`)
 - **ALWAYS web-search before implementing** unfamiliar libraries, APIs, or patterns
 - **NEVER assume** library behavior — verify with official documentation
 - **Search first** when encountering: new npm packages, Python libraries, framework features
 - Use `librarian` agent for docs, `explore` agent for codebase patterns
 
-### SWE Best Practices (per `.planning/codebase/TESTING.md`)
+### SWE Best Practices (per `docs/TESTING.md`)
 - **Write tests BEFORE or WITH code**, not after — TDD required
 - **Verify with diagnostics**: Run diagnostics before marking tasks complete
 - **Build & test**: Run build/test commands after implementation
@@ -267,16 +267,16 @@ from server.database.persistence import session_manager
 - **Minimal changes**: Fix bugs without refactoring unrelated code
 - **Running python files**: Use .venv in root of server directory, run with `python -m` for correct imports and environment
 
-### Task Workflow (per `.planning/codebase/TESTING.md`)
-1. **Read specs**: Check `.planning/codebase/ARCHITECTURE.md`, `.planning/codebase/STACK.md`, `.planning/codebase/CONVENTIONS.md`
+### Task Workflow (per `docs/TESTING.md`)
+1. **Read specs**: Check `docs/ARCHITECTURE.md`, `docs/STACK.md`, `docs/CONVENTIONS.md`
 2. **Select task**: Choose next task from roadmap in `.planning/`
 3. **Mark in progress**: Update task status in `.planning/` roadmap
 4. **Red phase**: Write failing tests first (verify they fail!)
 5. **Green phase**: Implement to pass tests
 6. **Refactor**: Improve clarity with passing tests as safety net
 7. **Verify coverage**: >80% for new code
-8. **Document deviations**: If implementation differs from stack, STOP and update `.planning/codebase/STACK.md`
-9. **Commit**: Clear message per `.planning/codebase/TESTING.md` commit format
+8. **Document deviations**: If implementation differs from stack, STOP and update `docs/STACK.md`
+9. **Commit**: Clear message per `docs/TESTING.md` commit format
 
 ### Phase Checkpointing Protocol
 When working on multi-phase tasks:
@@ -322,13 +322,6 @@ git log --show-notes
  * KEY COMPONENTS:
  *    - Component1: What it does
  *    - Component2: What it does
- *
- * DEPENDENCIES:
- *    - External: List external libraries
- *    - Internal: List internal modules
- *
- * USAGE:
- *    Example code snippet or how to use
  * ============================================================================
  */
 ```
@@ -349,11 +342,6 @@ ROLE IN PROJECT:
 KEY COMPONENTS:
     - Component1: What it does
     - Component2: What it does
-DEPENDENCIES:
-    - External: List external libraries used
-    - Internal: List internal modules imported
-USAGE:
-    Brief usage example or how to run/test
 ============================================================================
 """
 ```
@@ -395,76 +383,11 @@ USAGE:
 - **Session Sidebar**: Clean list with active indicators, "New Session" button, rename/delete menus
 
 ## References
-- `.planning/codebase/ARCHITECTURE.md` - Product vision and architecture
+- `docs/ARCHITECTURE.md` - Product vision and architecture
 - `conductor/product-guidelines.md` - UI/UX standards
-- `.planning/codebase/STACK.md` - Technology specifications
-- `.planning/codebase/TESTING.md` - Development workflow and quality gates
-- `.planning/codebase/CONVENTIONS.md` - Coding conventions for all languages
-- `.planning/codebase/STRUCTURE.md` - Directory layout
-- `.planning/codebase/INTEGRATIONS.md` - External service integrations
-- `.planning/codebase/CONCERNS.md` - Known issues and tech debt
-
-**Very Important**: Below is the instruction set for agent behavior. This is how you respond hereafter. Follow strictly. Do not deviate. 
-
-You are in Caveman mode (FULL)
-
-Respond terse like smart caveman. All technical substance stay. Only fluff die.
-
-## Persistence
-
-ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift. Still active if unsure. Off only: "stop caveman" / "normal mode".
-
-Default: **full**. Switch: `/caveman lite|full|ultra`.
-
-## Rules
-
-Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. Fragments OK. Short synonyms (big not extensive, fix not "implement a solution for"). Technical terms exact. Code blocks unchanged. Errors quoted exact.
-
-Pattern: `[thing] [action] [reason]. [next step].`
-
-Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
-Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
-
-## Intensity
-
-| Level | What change |
-|-------|------------|
-| **lite** | No filler/hedging. Keep articles + full sentences. Professional but tight |
-| **full** | Drop articles, fragments OK, short synonyms. Classic caveman |
-| **ultra** | Abbreviate prose words (DB/auth/config/req/res/fn/impl), strip conjunctions, arrows for causality (X → Y), one word when one word enough. Code symbols, function names, API names, error strings: never abbreviate |
-
-Example — "Why React component re-render?"
-- lite: "Your component re-renders because you create a new object reference each render. Wrap it in `useMemo`."
-- full: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
-- ultra: "Inline obj prop → new ref → re-render. `useMemo`."
-
-Example — "Explain database connection pooling."
-- lite: "Connection pooling reuses open connections instead of creating new ones per request. Avoids repeated handshake overhead."
-- full: "Pool reuse open DB connections. No new connection per request. Skip handshake overhead."
-- ultra: "Pool = reuse DB conn. Skip handshake → fast under load."
-
-## Cognitive Compression (Cross-Lingual Reasoning)
-Use to maximize reasoning efficiency and prevent English token bloat during complex architectural analysis. Decouple internal thinking language from final output language.
-
-## Auto-Clarity
-
-Drop caveman when:
-- spawning a subagent with clear instructions
-- Security warnings
-- Irreversible action confirmations
-- Multi-step sequences where fragment order or omitted conjunctions risk misread
-- Compression itself creates technical ambiguity (e.g., `"migrate table drop column backup first"` — order unclear without articles/conjunctions)
-- User asks to clarify or repeats question
-
-Resume caveman after clear part done.
-
-Example — destructive op:
-> **Warning:** This will permanently delete all rows in the `users` table and cannot be undone.
-> ```sql
-> DROP TABLE users;
-> ```
-> Caveman resume. Verify backup exist first.
-
-## Boundaries
-
-Code/commits/PRs: write normal. "stop caveman" or "normal mode": revert. Level persist until changed or session end.
+- `docs/STACK.md` - Technology specifications
+- `docs/TESTING.md` - Development workflow and quality gates
+- `docs/CONVENTIONS.md` - Coding conventions for all languages
+- `docs/STRUCTURE.md` - Directory layout
+- `docs/INTEGRATIONS.md` - External service integrations
+- `docs/CONCERNS.md` - Known issues and tech debt

@@ -22,12 +22,15 @@ USAGE:
 """
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import unittest
 
-from server.services.concept_chat import stream_concept_chat
 from server.schemas.learning import ConceptChatMessage
+from server.schemas.search import SearchContext
+from server.search.types import SearchProviderId
+from server.services.concept_chat import stream_concept_chat
 
 
 class FakeStream:
@@ -47,11 +50,49 @@ class FakeStream:
 def _chunk(text):
     delta = MagicMock()
     delta.content = text
+    delta.tool_calls = None
     choice = MagicMock()
     choice.delta = delta
+    choice.finish_reason = None
     chunk = MagicMock()
     chunk.choices = [choice]
     return chunk
+
+
+def _tool_delta_chunk(
+    index, call_id=None, name=None, arguments=None
+):
+    function = MagicMock()
+    function.name = name
+    function.arguments = arguments
+    tool_call = MagicMock()
+    tool_call.index = index
+    tool_call.id = call_id
+    tool_call.function = function
+    delta = MagicMock()
+    delta.content = None
+    delta.tool_calls = [tool_call]
+    choice = MagicMock()
+    choice.delta = delta
+    choice.finish_reason = None
+    chunk = MagicMock()
+    chunk.choices = [choice]
+    return chunk
+
+
+def _tool_stream(query="LangChain BaseTool"):
+    encoded = json.dumps({"query": query})
+    mid = max(1, len(encoded) // 2)
+    return [
+        _tool_delta_chunk(
+            0,
+            call_id="call_abc123",
+            name="web_search",
+            arguments="",
+        ),
+        _tool_delta_chunk(0, arguments=encoded[:mid]),
+        _tool_delta_chunk(0, arguments=encoded[mid:]),
+    ]
 
 
 def _make_client():
@@ -161,6 +202,73 @@ class TestConceptChatCaching(unittest.TestCase):
 
         asyncio.run(go())
         self.assertIsNone(captured["extra_body"])
+
+    def test_cache_control_on_both_rounds_when_tools_used(self) -> None:
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[
+                FakeStream(_tool_stream()),
+                FakeStream([_chunk("cached.")]),
+            ]
+        )
+        search_response = MagicMock()
+        search_response.results = [object()]
+        context = SearchContext.from_plaintext_credentials(
+            enabled=True,
+            provider_ids=[SearchProviderId.TAVILY],
+            credentials={SearchProviderId.TAVILY: "tvly-test"},
+        )
+        blob = 'WEB SEARCH RESULTS for: "LangChain BaseTool"\n'
+        sources = [
+            {
+                "title": "BaseTool",
+                "url": "https://python.langchain.com/docs",
+            }
+        ]
+
+        async def go():
+            with patch(
+                "server.services.concept_chat._get_client",
+                return_value=client,
+            ), patch(
+                "server.services.concept_chat.one_shot_chat_search",
+                new_callable=AsyncMock,
+                return_value=search_response,
+            ), patch(
+                "server.services.concept_chat.format_chat_search_results",
+                return_value=(blob, sources),
+            ):
+                async for _ in stream_concept_chat(
+                    api_key="k",
+                    model_slug="anthropic/claude-sonnet-4",
+                    message="What is this about?",
+                    history=[],
+                    content_markdown="LONG STABLE CONCEPT CONTENT " * 50,
+                    selected_heading_ids=[],
+                    node_title="Test Node",
+                    provider="openrouter",
+                    search_context=context,
+                ):
+                    pass
+
+        asyncio.run(go())
+        self.assertEqual(client.chat.completions.create.await_count, 2)
+        for index, call in enumerate(
+            client.chat.completions.create.call_args_list
+        ):
+            sys_msg = call.kwargs["messages"][0]
+            self.assertIsInstance(sys_msg["content"], list, msg=index)
+            self.assertEqual(
+                sys_msg["content"][0]["cache_control"],
+                {"type": "ephemeral"},
+                msg=index,
+            )
+            for message in call.kwargs["messages"][1:]:
+                content = message.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict):
+                            self.assertNotIn("cache_control", part)
 
 
 if __name__ == "__main__":

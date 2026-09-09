@@ -16,11 +16,12 @@
  *
  * KEY COMPONENTS:
  *    - ChatPanel: Named export drawer component
+ *    - Globe2: Per-chat web-search toggle (capability-gated)
  *
  * DEPENDENCIES:
  *    - External: react, framer-motion, lucide-react
  *    - Internal: @/types/learning, @/features/learning/useConceptChat,
- *                @/lib/utils
+ *                @/lib/utils, @/lib/providerSettings
  *
  * USAGE:
  *    ```tsx
@@ -38,8 +39,9 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, MessageCircle, Trash2 } from "lucide-react";
+import { X, Send, MessageCircle, Trash2, Globe2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { hasWebSearchCapability } from "@/lib/providerSettings";
 import { useConceptChat } from "./useConceptChat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -57,6 +59,15 @@ interface ChatPanelProps {
 	prefillMessage?: string;
 	/** Called after the prefillMessage has been applied to the input */
 	onPrefillConsumed?: () => void;
+}
+
+function isSafeHttpUrl(url: string): boolean {
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === "http:" || parsed.protocol === "https:";
+	} catch {
+		return false;
+	}
 }
 
 const TypingIndicator = () => (
@@ -86,7 +97,13 @@ export function ChatPanel({
 		sendMessage,
 		clearChat,
 		stopStreaming,
+		webSearchEnabled,
+		setWebSearchEnabled,
+		streamingStatus,
+		streamingWarning,
 	} = useConceptChat(sessionId, nodeId, isCourseComplete);
+
+	const canUseWebSearch = hasWebSearchCapability();
 
 	const [input, setInput] = useState("");
 	const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
@@ -366,13 +383,60 @@ export function ChatPanel({
 											content={msg.content}
 											className="text-[15px] leading-relaxed max-w-none"
 										/>
+									) : i === messages.length - 1 &&
+									  streamingStatus === "searching" ? (
+										<div
+											className="text-sm text-muted-foreground py-1"
+											role="status"
+										>
+											Searching the web...
+										</div>
 									) : (
 										<TypingIndicator />
+									)}
+									{msg.search && msg.search.sources.length > 0 && (
+										<div
+											className="mt-2 flex flex-wrap gap-1.5"
+											aria-label="Web search sources"
+										>
+											{msg.search.sources
+												.filter(
+													(source) =>
+														Boolean(source.title) &&
+														isSafeHttpUrl(source.url),
+												)
+												.map((source, sourceIndex) => (
+													<a
+														key={`${source.url}-${sourceIndex}`}
+														href={source.url}
+														target="_blank"
+														rel="noreferrer noopener"
+														className={cn(
+															"inline-flex max-w-full items-center truncate rounded-full",
+															"border border-border bg-muted px-2 py-0.5 text-xs",
+															"text-muted-foreground hover:text-foreground",
+															"focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+														)}
+													>
+														{source.title}
+													</a>
+												))}
+										</div>
 									)}
 								</div>
 							)}
 						</div>
 					))}
+
+						{streamingWarning && (
+							<div
+								className="text-center text-xs text-amber-600 dark:text-amber-400 py-2"
+								role="status"
+								aria-label={streamingWarning}
+							>
+								{streamingWarning}
+							</div>
+						)}
 
 						{error && (
 							<div className="text-center text-xs text-destructive py-2">
@@ -394,6 +458,31 @@ export function ChatPanel({
 							Ask a question about this concept
 						</label>
 						<div className="flex items-end gap-2">
+							{canUseWebSearch && (
+								<button
+									type="button"
+									aria-label="Use web search for this chat"
+									aria-pressed={webSearchEnabled}
+									title={
+										webSearchEnabled
+											? "Web search on for this chat"
+											: "Web search off for this chat"
+									}
+									onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+									disabled={isStreaming}
+									className={cn(
+										"inline-flex items-center justify-center h-8 w-8 rounded-md shrink-0",
+										"border transition-colors duration-200",
+										"focus:outline-none focus:ring-2 focus:ring-primary",
+										"disabled:opacity-50 disabled:cursor-not-allowed",
+										webSearchEnabled
+											? "bg-[#ffb74d]/15 border-[#ffb74d] text-[#ffb74d]"
+											: "bg-muted border-border text-muted-foreground hover:text-foreground",
+									)}
+								>
+									<Globe2 className="h-4 w-4" aria-hidden="true" />
+								</button>
+							)}
 							<textarea
 								id="chat-input"
 								ref={textareaRef}
