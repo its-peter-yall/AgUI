@@ -119,7 +119,7 @@ class MongoGenerationJobRepository:
             "mode": mode,
             "resolved_mode": None,
             "title_finalized": False,
-            "status": "active",
+            "status": "in_progress",
             "progress_percent": 0,
             "completed_at": None,
             "last_active_node_id": None,

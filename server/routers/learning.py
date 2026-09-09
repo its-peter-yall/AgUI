@@ -425,7 +425,8 @@ def get_learning_sessions(
             row.setdefault("total_nodes", 0)
             row.setdefault("completed_nodes", 0)
             row.setdefault("progress_percent", 0)
-            row.setdefault("status", "in_progress")
+            if row.get("status") in ("active", None, ""):
+                row["status"] = "in_progress"
             public_job = job_map.get(s["id"])
             if public_job is not None:
                 row["generation_stage"] = public_job.stage.value

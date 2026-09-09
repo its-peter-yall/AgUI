@@ -109,9 +109,13 @@ class MongoLearningTests(unittest.TestCase):
                 mode="auto",
             )
 
-        inserted = self.database["learning_sessions"].insert_one.call_args.args[0]
+        inserted = (
+            self.database["learning_sessions"].insert_one.call_args.args[0]
+        )
         self.assertEqual(inserted["_id"], "session-1")
+        self.assertEqual(inserted["status"], "in_progress")
         self.assertEqual(result["id"], "session-1")
+        self.assertEqual(result["status"], "in_progress")
         self.assertNotIn("_id", result)
 
     def test_get_sessions_list_uses_safe_sort_and_pagination(self) -> None:
@@ -143,6 +147,56 @@ class MongoLearningTests(unittest.TestCase):
         self.assertIn("completed_nodes", sessions[0])
         summary = LearningSessionSummary.model_validate(sessions[0])
         self.assertEqual(summary.id, "s1")
+
+    def test_get_sessions_list_normalizes_legacy_active_status(self) -> None:
+        collection = self.database["learning_sessions"]
+        collection.count_documents.return_value = 1
+        cursor = collection.find.return_value
+        cursor.sort.return_value.skip.return_value.limit.return_value = [
+            {
+                "_id": "s1",
+                "query": "q",
+                "course_title": "Title",
+                "status": "active",
+                "created_at": "2026-08-03T11:00:00Z",
+                "updated_at": "2026-08-03T11:00:00Z",
+            }
+        ]
+
+        sessions, total = self.repository.get_sessions_list(None)
+
+        self.assertEqual(sessions[0]["status"], "in_progress")
+        summary = LearningSessionSummary.model_validate(sessions[0])
+        self.assertEqual(summary.status, "in_progress")
+
+    def test_get_sessions_list_in_progress_filter_includes_legacy_active(
+        self,
+    ) -> None:
+        collection = self.database["learning_sessions"]
+        collection.count_documents.return_value = 0
+        cursor = collection.find.return_value
+        cursor.sort.return_value.skip.return_value.limit.return_value = []
+
+        self.repository.get_sessions_list(None, status="in_progress")
+
+        find_query = collection.find.call_args.args[0]
+        self.assertEqual(
+            find_query.get("status"),
+            {"$in": ["in_progress", "active"]},
+        )
+
+    def test_get_session_progress_normalizes_legacy_active_status(self) -> None:
+        collection = self.database["learning_sessions"]
+        collection.find_one.return_value = {
+            "_id": "s1",
+            "status": "active",
+            "last_active_node_id": None,
+        }
+        self.database["concept_nodes"].count_documents.return_value = 0
+
+        progress = self.repository.get_session_progress("s1")
+        self.assertIsNotNone(progress)
+        self.assertEqual(progress["status"], "in_progress")
 
     def test_node_status_update_uses_current_status_compare(self) -> None:
         nodes = self.database["concept_nodes"]
